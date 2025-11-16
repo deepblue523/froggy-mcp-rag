@@ -1,0 +1,48 @@
+{
+  "name": "froggy-rag-mcp",
+  "version": "1.0.0",
+  "description": "Turnkey RAG system with MCP server and UI",
+  "main": "src/main/main.js",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron . --dev",
+    "build": "electron-builder",
+    "postinstall": "electron-rebuild -f -w better-sqlite3"
+  },
+  "keywords": [
+    "rag",
+    "mcp",
+    "electron",
+    "vector-store"
+  ],
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "@electron/rebuild": "^4.0.1",
+    "electron": "^28.0.0",
+    "electron-builder": "^24.9.1"
+  },
+  "dependencies": {
+    "@xenova/transformers": "^2.17.1",
+    "better-sqlite3": "^11.7.0",
+    "chokidar": "^3.5.3",
+    "docx": "^8.2.2",
+    "exceljs": "^4.4.0",
+    "express": "^4.18.2",
+    "mammoth": "^1.6.0",
+    "natural": "^8.1.0",
+    "pdf-parse": "^1.1.1",
+    "uuid": "^9.0.1"
+  },
+  "build": {
+    "appId": "com.froggy.ragmcp",
+    "productName": "Froggy RAG MCP",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "src/**/*",
+      "node_modules/**/*"
+    ]
+  }
+}

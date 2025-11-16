@@ -1,0 +1,299 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Froggy RAG MCP</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="app-container">
+    <!-- Header -->
+    <header class="header">
+      <h1>Froggy RAG MCP</h1>
+    </header>
+
+    <!-- Main Content -->
+    <div class="main-content">
+      <!-- Left Tree Panel -->
+      <div class="tree-panel" id="treePanel">
+        <div class="tree-container">
+          <div class="tree-item" data-node="ingestion">
+            <span class="tree-icon">📁</span>
+            <span class="tree-label">Ingestion</span>
+            <span class="tree-expander">▼</span>
+          </div>
+          <div class="tree-children" data-parent="ingestion">
+            <div class="tree-item" data-node="files">
+              <span class="tree-icon">📄</span>
+              <span class="tree-label">Files</span>
+            </div>
+            <div class="tree-item" data-node="directories">
+              <span class="tree-icon">📂</span>
+              <span class="tree-label">Directories</span>
+            </div>
+          </div>
+          
+          <div class="tree-item" data-node="vector-store">
+            <span class="tree-icon">🗄️</span>
+            <span class="tree-label">Vector Store</span>
+          </div>
+          
+          <div class="tree-item" data-node="search">
+            <span class="tree-icon">🔍</span>
+            <span class="tree-label">Search</span>
+          </div>
+          
+          <div class="tree-item" data-node="server">
+            <span class="tree-icon">🖥️</span>
+            <span class="tree-label">Server</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Splitter -->
+      <div class="splitter" id="splitter"></div>
+
+      <!-- Content Panel -->
+      <div class="content-panel" id="contentPanel">
+        <!-- Files Canvas -->
+        <div class="canvas" id="files-canvas" style="display: none;">
+          <h2>Files</h2>
+          <div class="toolbar">
+            <button class="btn btn-primary" id="add-file-btn">Add File</button>
+            <input type="file" id="file-input" multiple style="display: none;" accept=".txt,.pdf,.docx,.xlsx,.csv">
+          </div>
+          <div class="grid-container" id="files-grid">
+            <table class="data-grid">
+              <thead>
+                <tr>
+                  <th>File Path</th>
+                  <th>Status</th>
+                  <th>Watch</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody id="files-tbody"></tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- Directories Canvas -->
+        <div class="canvas" id="directories-canvas" style="display: none;">
+          <h2>Directories</h2>
+          <div class="toolbar">
+            <button class="btn btn-primary" id="add-directory-btn">Add Directory</button>
+            <input type="file" id="directory-input" webkitdirectory style="display: none;">
+          </div>
+          <div class="grid-container" id="directories-grid">
+            <table class="data-grid">
+              <thead>
+                <tr>
+                  <th>Directory Path</th>
+                  <th>Recursive</th>
+                  <th>Watch</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody id="directories-tbody"></tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- Vector Store Canvas -->
+        <div class="canvas" id="vector-store-canvas" style="display: none;">
+          <h2>Vector Store</h2>
+          <div class="chunking-controls" style="margin-bottom: 20px; padding: 15px; background: #f9f9f9; border-radius: 4px; border: 1px solid #e0e0e0;">
+            <h3 style="margin: 0 0 15px 0; font-size: 16px; font-weight: 600; color: #424242;">Chunking Settings</h3>
+            <div style="display: flex; gap: 20px; align-items: center; flex-wrap: wrap;">
+              <div style="display: flex; align-items: center; gap: 10px;">
+                <label for="chunk-size-input" style="font-weight: 500; color: #616161; white-space: nowrap;">Chunk Size:</label>
+                <input type="number" id="chunk-size-input" min="100" max="10000" step="100" value="1000" style="width: 100px; padding: 6px 10px; border: 1px solid #ccc; border-radius: 4px; font-size: 14px;" />
+                <span style="color: #757575; font-size: 13px;">characters</span>
+              </div>
+              <div style="display: flex; align-items: center; gap: 10px;">
+                <label for="chunk-overlap-input" style="font-weight: 500; color: #616161; white-space: nowrap;">Overlap:</label>
+                <input type="number" id="chunk-overlap-input" min="0" max="5000" step="50" value="200" style="width: 100px; padding: 6px 10px; border: 1px solid #ccc; border-radius: 4px; font-size: 14px;" />
+                <span style="color: #757575; font-size: 13px;">characters</span>
+              </div>
+              <button id="save-chunking-settings-btn" class="btn btn-primary" style="margin-left: auto;">Save Settings</button>
+            </div>
+            <p style="margin: 10px 0 0 0; font-size: 12px; color: #757575;">These settings will be applied to newly ingested documents.</p>
+          </div>
+          <div class="stats-bar" id="vector-store-stats"></div>
+          <div class="grid-container">
+            <div class="documents-panel">
+              <h3>Documents</h3>
+              <table class="data-grid">
+                <thead>
+                  <tr>
+                    <th>File Name</th>
+                    <th>Type</th>
+                    <th>Status</th>
+                    <th>Last Updated</th>
+                    <th>Chunks</th>
+                  </tr>
+                </thead>
+                <tbody id="documents-tbody"></tbody>
+              </table>
+            </div>
+            <div class="chunks-panel" id="chunks-panel" style="display: none;">
+              <h3>Chunks</h3>
+              <table class="data-grid">
+                <thead>
+                  <tr>
+                    <th>Index</th>
+                    <th>Preview</th>
+                    <th>Last Updated</th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody id="chunks-tbody"></tbody>
+              </table>
+            </div>
+          </div>
+          <!-- Chunk Detail Modal -->
+          <div class="modal-overlay" id="chunk-modal-overlay" style="display: none;">
+            <div class="modal-dialog" id="chunk-modal">
+              <div class="modal-header">
+                <h3>Chunk Details</h3>
+                <button class="modal-close" onclick="closeChunkDetail()">&times;</button>
+              </div>
+              <div class="modal-body">
+                <div class="chunk-content-section">
+                  <h4>Content</h4>
+                  <div class="chunk-content-text" id="chunk-content"></div>
+                </div>
+                <div class="chunk-metadata-section">
+                  <h4>Metadata</h4>
+                  <div class="chunk-metadata-grid" id="chunk-metadata"></div>
+                </div>
+              </div>
+              <div class="modal-footer">
+                <button class="btn btn-secondary" onclick="closeChunkDetail()">Close</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Search Canvas -->
+        <div class="canvas" id="search-canvas" style="display: none;">
+          <h2>Search</h2>
+          <div class="search-container">
+            <div class="search-box" style="position: relative;">
+              <input type="text" id="search-input" placeholder="Enter search query..." autocomplete="off" />
+              <button class="btn btn-primary" id="search-btn">Search</button>
+            </div>
+            <div class="mru-container" id="mru-container">
+              <h4>Recent Searches</h4>
+              <div id="mru-list"></div>
+            </div>
+          </div>
+          <div class="search-results" id="search-results" style="display: none;">
+            <h3>Results</h3>
+            <div class="search-options" style="margin-bottom: 10px;">
+              <label for="search-algorithm">Algorithm: </label>
+              <select id="search-algorithm" style="padding: 5px; margin-left: 5px;">
+                <option value="hybrid">Hybrid (BM25 + Vector)</option>
+                <option value="bm25">BM25</option>
+                <option value="tfidf">TF-IDF</option>
+                <option value="vector">Vector Similarity</option>
+              </select>
+            </div>
+            <table class="data-grid">
+              <thead>
+                <tr>
+                  <th>Score</th>
+                  <th>Algorithm</th>
+                  <th>Document</th>
+                  <th>Preview</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody id="search-results-tbody"></tbody>
+            </table>
+          </div>
+          <div class="chunk-detail" id="search-chunk-detail" style="display: none;">
+            <h3>Chunk Details</h3>
+            <div id="search-chunk-content"></div>
+            <div id="search-chunk-metadata"></div>
+            <button class="btn btn-secondary" onclick="closeSearchChunkDetail()">Close</button>
+          </div>
+        </div>
+
+        <!-- Server Canvas -->
+        <div class="canvas" id="server-canvas" style="display: none;">
+          <h2>Server</h2>
+          <div class="server-controls">
+            <div class="server-status" id="server-status">
+              <span>Status: <span id="server-status-text">Stopped</span></span>
+            </div>
+            <div class="server-actions">
+              <input type="number" id="server-port" value="3000" placeholder="Port" />
+              <button class="btn btn-primary" id="start-server-btn">Start Server</button>
+              <button class="btn btn-danger" id="stop-server-btn" disabled>Stop Server</button>
+              <button class="btn btn-secondary" id="self-test-btn" disabled>Self Test</button>
+            </div>
+            <div class="server-auto-start">
+              <label>
+                <input type="checkbox" id="auto-start-server-checkbox" />
+                <span>Automatically start server when app starts</span>
+              </label>
+            </div>
+          </div>
+          <div class="server-endpoints" id="server-endpoints" style="display: none;">
+            <h3>Server URLs</h3>
+            <div class="endpoints-info">
+              <div class="server-urls">
+                <div class="server-url-item">
+                  <div class="url-label">
+                    <strong>REST API URL:</strong>
+                  </div>
+                  <div class="url-value-container">
+                    <span class="url-value" id="rest-url-value"></span>
+                    <button class="btn btn-secondary btn-copy" data-url-type="rest" title="Copy to clipboard">
+                      📋 Copy
+                    </button>
+                  </div>
+                </div>
+                <div class="server-url-item">
+                  <div class="url-label">
+                    <strong>MCP Protocol URL:</strong>
+                  </div>
+                  <div class="url-value-container">
+                    <span class="url-value" id="mcp-url-value"></span>
+                    <button class="btn btn-secondary btn-copy" data-url-type="mcp" title="Copy to clipboard">
+                      📋 Copy
+                    </button>
+                  </div>
+                </div>
+              </div>
+              <div class="endpoints-list">
+                <h4>REST API Endpoints:</h4>
+                <table class="endpoints-table">
+                  <thead>
+                    <tr>
+                      <th>Method</th>
+                      <th>Endpoint</th>
+                      <th>Description</th>
+                    </tr>
+                  </thead>
+                  <tbody id="endpoints-tbody"></tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+          <div class="server-logs" id="server-logs">
+            <h3>Logs</h3>
+            <div class="log-container" id="log-container"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
+
+
