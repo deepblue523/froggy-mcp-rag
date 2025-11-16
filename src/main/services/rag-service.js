@@ -374,11 +374,41 @@ class RAGService extends EventEmitter {
   }
 
   removeDirectory(dirPath) {
-    this.settings.directories = this.settings.directories.filter(d => d.path !== dirPath);
-    this.saveSettings();
+    // Normalize paths for comparison
+    const normalizedDirPath = path.resolve(dirPath);
     
-    // Stop watching
-    this.unwatchDirectory(dirPath);
+    // Find the directory entry (might be stored with different path format)
+    const dirEntry = this.settings.directories.find(d => {
+      const storedPath = path.resolve(d.path);
+      return storedPath === normalizedDirPath;
+    });
+    
+    if (dirEntry) {
+      // Remove from settings using the stored path format
+      this.settings.directories = this.settings.directories.filter(d => {
+        const storedPath = path.resolve(d.path);
+        return storedPath !== normalizedDirPath;
+      });
+      this.saveSettings();
+      
+      // Stop watching (use stored path)
+      this.unwatchDirectory(dirEntry.path);
+    }
+    
+    // Remove all files from this directory in the vector store
+    const allDocuments = this.vectorStore.getDocuments();
+    const normalizedDirPathWithSep = normalizedDirPath + path.sep;
+    
+    for (const doc of allDocuments) {
+      const normalizedDocPath = path.resolve(doc.file_path);
+      // Check if document is within the directory being removed
+      if (normalizedDocPath.startsWith(normalizedDirPathWithSep) || normalizedDocPath === normalizedDirPath) {
+        this.vectorStore.deleteDocument(doc.id);
+      }
+    }
+    
+    // Emit event to notify UI of vector store change
+    this.emit('ingestion-update', { type: 'removed', dirPath });
   }
 
   updateFileWatch(filePath, watch) {

@@ -78,6 +78,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // File reading
   readUsageFile: () => ipcRenderer.invoke('read-usage-file'),
   
+  // Path checking
+  isDirectory: (filePath) => ipcRenderer.invoke('is-directory', filePath),
+  
   // Markdown rendering
   renderMarkdown: (markdown) => {
     try {

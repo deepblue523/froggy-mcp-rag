@@ -70,6 +70,14 @@ async function initializeApp() {
 }
 
 function setupEventListeners() {
+  // Settings button
+  const settingsBtn = document.getElementById('settings-btn');
+  if (settingsBtn) {
+    settingsBtn.addEventListener('click', async () => {
+      await showSettingsModal();
+    });
+  }
+
   // Help button
   const helpBtn = document.getElementById('help-btn');
   if (helpBtn) {
@@ -150,13 +158,16 @@ function setupEventListeners() {
     await saveAutoStartSetting(e.target.checked);
   });
 
-  // Chunking settings
-  const saveChunkingSettingsBtn = document.getElementById('save-chunking-settings-btn');
+  // Chunking settings (in settings modal)
+  const saveChunkingSettingsBtn = document.getElementById('settings-save-chunking-settings-btn');
   if (saveChunkingSettingsBtn) {
     saveChunkingSettingsBtn.addEventListener('click', async () => {
       await saveChunkingSettings();
     });
   }
+
+  // Settings page navigation
+  setupSettingsNavigation();
 
   // Regenerate vector store
   const regenerateVectorStoreBtn = document.getElementById('regenerate-vector-store-btn');
@@ -388,7 +399,6 @@ function showCanvas(canvasName) {
     case 'vector-store':
       document.getElementById('vector-store-canvas').style.display = 'block';
       refreshVectorStore();
-      loadChunkingSettings();
       break;
     case 'search':
       document.getElementById('search-canvas').style.display = 'block';
@@ -1365,8 +1375,14 @@ window.removeFile = async function(filePath) {
 
 window.removeDirectory = async function(dirPath) {
   if (confirm(`Remove directory ${dirPath}?`)) {
-    await window.electronAPI.removeDirectory(dirPath);
-    await refreshDirectories();
+    try {
+      await window.electronAPI.removeDirectory(dirPath);
+      await refreshDirectories();
+      await refreshVectorStore();
+    } catch (error) {
+      console.error('Error removing directory:', error);
+      alert(`Error removing directory: ${error.message}`);
+    }
   }
 };
 
@@ -1388,38 +1404,114 @@ function setupDragAndDrop() {
   const filesCanvas = document.getElementById('files-canvas');
   const directoriesCanvas = document.getElementById('directories-canvas');
   
-  [filesCanvas, directoriesCanvas].forEach(canvas => {
-    if (!canvas) return;
-    
-    canvas.addEventListener('dragover', (e) => {
+  // Setup files canvas drag and drop
+  if (filesCanvas) {
+    filesCanvas.addEventListener('dragover', (e) => {
       e.preventDefault();
-      canvas.style.backgroundColor = '#e3f2fd';
+      e.stopPropagation();
+      filesCanvas.style.backgroundColor = '#e3f2fd';
     });
     
-    canvas.addEventListener('dragleave', () => {
-      canvas.style.backgroundColor = '';
+    filesCanvas.addEventListener('dragleave', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      // Only reset background if we're leaving the canvas (not just entering a child element)
+      if (!filesCanvas.contains(e.relatedTarget)) {
+        filesCanvas.style.backgroundColor = '';
+      }
     });
     
-    canvas.addEventListener('drop', async (e) => {
+    filesCanvas.addEventListener('drop', async (e) => {
       e.preventDefault();
-      canvas.style.backgroundColor = '';
+      e.stopPropagation();
+      filesCanvas.style.backgroundColor = '';
       
-      const files = Array.from(e.dataTransfer.files);
-      for (const file of files) {
-        if (canvas.id === 'files-canvas') {
-          await window.electronAPI.ingestFile(file.path, false);
-        } else if (canvas.id === 'directories-canvas') {
-          // For directories, we'd need to handle this differently
-          // For now, just show a message
-          alert('Please use the Add Directory button to add directories');
+      const items = Array.from(e.dataTransfer.files);
+      for (const item of items) {
+        if (item.path) {
+          // Check if it's a directory
+          const isDir = await window.electronAPI.isDirectory(item.path);
+          if (!isDir) {
+            // Only process files on the files canvas
+            try {
+              await window.electronAPI.ingestFile(item.path, false);
+            } catch (error) {
+              console.error('Error ingesting file:', error);
+              alert(`Error adding file ${item.path}: ${error.message}`);
+            }
+          } else {
+            // If it's a directory, show a message
+            alert(`Please drop directories on the Directories screen. ${item.path} is a directory.`);
+          }
         }
       }
       
       await refreshFiles();
       await refreshDirectories();
     });
-  });
+  }
+  
+  // Setup directories canvas drag and drop
+  if (directoriesCanvas) {
+    directoriesCanvas.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      directoriesCanvas.style.backgroundColor = '#e3f2fd';
+    });
+    
+    directoriesCanvas.addEventListener('dragleave', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      // Only reset background if we're leaving the canvas (not just entering a child element)
+      if (!directoriesCanvas.contains(e.relatedTarget)) {
+        directoriesCanvas.style.backgroundColor = '';
+      }
+    });
+    
+    directoriesCanvas.addEventListener('drop', async (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      directoriesCanvas.style.backgroundColor = '';
+      
+      const items = Array.from(e.dataTransfer.files);
+      const directories = [];
+      const files = [];
+      
+      // Separate directories from files
+      for (const item of items) {
+        if (item.path) {
+          const isDir = await window.electronAPI.isDirectory(item.path);
+          if (isDir) {
+            directories.push(item.path);
+          } else {
+            files.push(item.path);
+          }
+        }
+      }
+      
+      // Process directories
+      for (const dirPath of directories) {
+        try {
+          await window.electronAPI.ingestDirectory(dirPath, false, false);
+        } catch (error) {
+          console.error('Error ingesting directory:', error);
+          alert(`Error adding directory ${dirPath}: ${error.message}`);
+        }
+      }
+      
+      // Show message if files were dropped on directories canvas
+      if (files.length > 0 && directories.length === 0) {
+        alert(`Please drop directories here. Files should be dropped on the Files screen.`);
+      } else if (files.length > 0 && directories.length > 0) {
+        alert(`Added ${directories.length} directory(ies). ${files.length} file(s) were ignored. Please drop files on the Files screen.`);
+      }
+      
+      await refreshFiles();
+      await refreshDirectories();
+    });
+  }
 }
+
 
 function formatBytes(bytes) {
   if (bytes === 0) return '0 B';
@@ -1499,8 +1591,8 @@ async function loadSettings() {
 
 async function loadChunkingSettings() {
   const settings = await window.electronAPI.getSettings();
-  const chunkSizeInput = document.getElementById('chunk-size-input');
-  const chunkOverlapInput = document.getElementById('chunk-overlap-input');
+  const chunkSizeInput = document.getElementById('settings-chunk-size-input');
+  const chunkOverlapInput = document.getElementById('settings-chunk-overlap-input');
   
   if (chunkSizeInput) {
     chunkSizeInput.value = settings.chunkSize || 1000;
@@ -1511,8 +1603,8 @@ async function loadChunkingSettings() {
 }
 
 async function saveChunkingSettings() {
-  const chunkSizeInput = document.getElementById('chunk-size-input');
-  const chunkOverlapInput = document.getElementById('chunk-overlap-input');
+  const chunkSizeInput = document.getElementById('settings-chunk-size-input');
+  const chunkOverlapInput = document.getElementById('settings-chunk-overlap-input');
   
   if (!chunkSizeInput || !chunkOverlapInput) {
     return;
@@ -1543,7 +1635,7 @@ async function saveChunkingSettings() {
   await window.electronAPI.saveSettings(settings);
   
   // Show confirmation
-  const btn = document.getElementById('save-chunking-settings-btn');
+  const btn = document.getElementById('settings-save-chunking-settings-btn');
   const originalText = btn.textContent;
   btn.textContent = '✓ Saved!';
   btn.style.background = '#4caf50';
@@ -2067,6 +2159,92 @@ window.closeHelpModal = function() {
     helpModalEscapeKeyHandler = null;
   }
 };
+
+// Settings Modal Functions
+let settingsModalOverlayClickHandler = null;
+let settingsModalEscapeKeyHandler = null;
+
+async function showSettingsModal() {
+  const modal = document.getElementById('settings-modal-overlay');
+  if (!modal) {
+    console.error('Settings modal element not found');
+    return;
+  }
+  
+  // Load chunking settings when opening modal
+  await loadChunkingSettings();
+  
+  // Clean up previous event handlers
+  if (settingsModalOverlayClickHandler) {
+    modal.removeEventListener('click', settingsModalOverlayClickHandler);
+  }
+  if (settingsModalEscapeKeyHandler) {
+    document.removeEventListener('keydown', settingsModalEscapeKeyHandler);
+  }
+  
+  // Close on overlay click
+  settingsModalOverlayClickHandler = (e) => {
+    if (e.target === modal) {
+      closeSettingsModal();
+    }
+  };
+  modal.addEventListener('click', settingsModalOverlayClickHandler);
+  
+  // Close on Escape key
+  settingsModalEscapeKeyHandler = (e) => {
+    if (e.key === 'Escape') {
+      closeSettingsModal();
+    }
+  };
+  document.addEventListener('keydown', settingsModalEscapeKeyHandler);
+  
+  // Show modal
+  modal.style.display = 'flex';
+}
+
+window.closeSettingsModal = function() {
+  const modal = document.getElementById('settings-modal-overlay');
+  if (modal) {
+    modal.style.display = 'none';
+  }
+  
+  // Clean up event handlers
+  if (settingsModalOverlayClickHandler) {
+    modal.removeEventListener('click', settingsModalOverlayClickHandler);
+    settingsModalOverlayClickHandler = null;
+  }
+  if (settingsModalEscapeKeyHandler) {
+    document.removeEventListener('keydown', settingsModalEscapeKeyHandler);
+    settingsModalEscapeKeyHandler = null;
+  }
+};
+
+function setupSettingsNavigation() {
+  const pageItems = document.querySelectorAll('.settings-page-item');
+  
+  pageItems.forEach(item => {
+    item.addEventListener('click', () => {
+      const pageName = item.dataset.settingsPage;
+      
+      // Remove active class from all items
+      pageItems.forEach(i => i.classList.remove('active'));
+      
+      // Add active class to clicked item
+      item.classList.add('active');
+      
+      // Hide all pages
+      document.querySelectorAll('.settings-page').forEach(page => {
+        page.style.display = 'none';
+      });
+      
+      // Show selected page
+      const selectedPage = document.getElementById(`settings-page-${pageName}`);
+      if (selectedPage) {
+        selectedPage.style.display = 'block';
+      }
+    });
+  });
+}
 
 // Markdown rendering is now handled by the marked library via electronAPI.renderMarkdown()
 // The old convertMarkdownToHTML function has been removed in favor of marked

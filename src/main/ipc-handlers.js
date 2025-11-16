@@ -134,6 +134,20 @@ module.exports = function setupIpcHandlers(ipcMain, ragService, mcpService) {
     }
   });
 
+  // Path checking handler
+  ipcMain.handle('is-directory', (_, filePath) => {
+    try {
+      if (!fs.existsSync(filePath)) {
+        return false;
+      }
+      const stats = fs.statSync(filePath);
+      return stats.isDirectory();
+    } catch (error) {
+      console.error('Error checking if path is directory:', error);
+      return false;
+    }
+  });
+
   // Setup event forwarding
   ragService.on('ingestion-update', (data) => {
     const window = require('electron').BrowserWindow.getAllWindows()[0];
