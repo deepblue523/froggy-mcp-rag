@@ -48,22 +48,32 @@ function saveWindowState() {
 
 function ensureWindowOnScreen(bounds) {
   const primaryDisplay = screen.getPrimaryDisplay();
-  const { width: screenWidth, height: screenHeight } = primaryDisplay.workAreaSize;
-  const { x: screenX, y: screenY } = primaryDisplay.workArea;
-  
-  // Ensure window fits within screen bounds
+  const workArea = primaryDisplay.workArea; // { x, y, width, height }
   let { x, y, width, height } = bounds;
-  
-  // Ensure minimum size
-  width = Math.max(width, 800);
-  height = Math.max(height, 600);
-  
-  // Ensure window is not off-screen
-  if (x < screenX) x = screenX;
-  if (y < screenY) y = screenY;
-  if (x + width > screenX + screenWidth) x = screenX + screenWidth - width;
-  if (y + height > screenY + screenHeight) y = screenY + screenHeight - height;
-  
+
+  // Fallback for invalid or missing values
+  const isNumber = (v) => typeof v === 'number' && Number.isFinite(v);
+  if (!isNumber(width)) width = 1400;
+  if (!isNumber(height)) height = 900;
+  if (!isNumber(x)) x = workArea.x + 50;
+  if (!isNumber(y)) y = workArea.y + 50;
+
+  // Enforce reasonable min size
+  const minWidth = 800;
+  const minHeight = 600;
+  width = Math.max(width, minWidth);
+  height = Math.max(height, minHeight);
+
+  // Do not exceed available work area
+  width = Math.min(width, workArea.width);
+  height = Math.min(height, workArea.height);
+
+  // Clamp within work area so the title bar is always reachable (no off-screen top)
+  const maxX = workArea.x + (workArea.width - width);
+  const maxY = workArea.y + (workArea.height - height);
+  x = Math.min(Math.max(x, workArea.x), maxX);
+  y = Math.min(Math.max(y, workArea.y), maxY);
+
   return { x, y, width, height };
 }
 

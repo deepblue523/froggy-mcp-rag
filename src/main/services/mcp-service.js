@@ -8,6 +8,7 @@ class MCPService extends EventEmitter {
     this.ragService = ragService;
     this.server = null;
     this.restServer = null;
+    this.httpServer = null;
     this.restPort = null;
     this.logs = [];
     this.maxLogs = 1000;
@@ -30,7 +31,7 @@ class MCPService extends EventEmitter {
   }
 
   async start(port = 3000) {
-    if (this.server) {
+    if (this.httpServer) {
       throw new Error('MCP server is already running');
     }
 
@@ -59,13 +60,13 @@ class MCPService extends EventEmitter {
     this.setupMCPProtocol();
 
     return new Promise((resolve, reject) => {
-      this.restServer.listen(port, () => {
+      this.httpServer = this.restServer.listen(port, () => {
         this.log('info', `MCP REST server started on port ${port}`);
         this.log('info', `MCP Protocol endpoint available at http://localhost:${port}/mcp`);
         resolve({ port, status: 'running' });
       });
 
-      this.restServer.on('error', (error) => {
+      this.httpServer.on('error', (error) => {
         this.log('error', `MCP REST server error: ${error.message}`);
         reject(error);
       });
@@ -76,6 +77,198 @@ class MCPService extends EventEmitter {
     // Health check
     this.restServer.get('/health', (req, res) => {
       res.json({ status: 'ok', service: 'froggy-rag-mcp' });
+    });
+
+    // Status endpoint
+    this.restServer.get('/status', (req, res) => {
+      try {
+        const status = this.getStatus();
+        res.json(status);
+      } catch (error) {
+        this.log('error', 'Status error', { error: error.message });
+        res.status(500).json({ error: error.message });
+      }
+    });
+
+    // List tools endpoint
+    this.restServer.get('/tools', (req, res) => {
+      try {
+        const tools = [
+          {
+            id: 'search',
+            name: 'search',
+            description: 'Search the vector store for similar content',
+            inputSchema: {
+              type: 'object',
+              properties: {
+                query: { type: 'string', description: 'Search query' },
+                limit: { type: 'number', description: 'Maximum number of results', default: 10 },
+                algorithm: { 
+                  type: 'string',
+                  description: 'Search algorithm: hybrid, bm25, tfidf, or vector',
+                  enum: ['hybrid', 'bm25', 'tfidf', 'vector'],
+                  default: 'hybrid'
+                }
+              },
+              required: ['query']
+            }
+          },
+          {
+            id: 'get_documents',
+            name: 'get_documents',
+            description: 'Get all documents in the vector store',
+            inputSchema: { type: 'object', properties: {} }
+          },
+          {
+            id: 'get_document_chunks',
+            name: 'get_document_chunks',
+            description: 'Get chunks for a specific document',
+            inputSchema: {
+              type: 'object',
+              properties: {
+                documentId: { type: 'string', description: 'Document ID' }
+              },
+              required: ['documentId']
+            }
+          },
+          {
+            id: 'get_chunk',
+            name: 'get_chunk',
+            description: 'Get chunk content by ID',
+            inputSchema: {
+              type: 'object',
+              properties: {
+                chunkId: { type: 'string', description: 'Chunk ID' }
+              },
+              required: ['chunkId']
+            }
+          },
+          {
+            id: 'get_stats',
+            name: 'get_stats',
+            description: 'Get vector store statistics',
+            inputSchema: { type: 'object', properties: {} }
+          },
+          {
+            id: 'ingest_file',
+            name: 'ingest_file',
+            description: 'Ingest a file into the vector store',
+            inputSchema: {
+              type: 'object',
+              properties: {
+                filePath: { type: 'string', description: 'Path to the file' },
+                watch: { type: 'boolean', description: 'Watch for file changes', default: false }
+              },
+              required: ['filePath']
+            }
+          },
+          {
+            id: 'ingest_directory',
+            name: 'ingest_directory',
+            description: 'Ingest a directory into the vector store',
+            inputSchema: {
+              type: 'object',
+              properties: {
+                dirPath: { type: 'string', description: 'Path to the directory' },
+                recursive: { type: 'boolean', description: 'Recursively scan subdirectories', default: false },
+                watch: { type: 'boolean', description: 'Watch for file changes', default: false }
+              },
+              required: ['dirPath']
+            }
+          }
+        ];
+        res.json({ tools });
+      } catch (error) {
+        this.log('error', 'List tools error', { error: error.message });
+        res.status(500).json({ error: error.message });
+      }
+    });
+
+    // Generic tool invocation endpoint
+    this.restServer.post('/tools/:toolId', async (req, res) => {
+      const toolId = req.params.toolId;
+      const args = req.body || {};
+
+      try {
+        switch (toolId) {
+          case 'search': {
+            const { query, limit = 10, algorithm = 'hybrid' } = args;
+            if (!query) {
+              return res.status(400).json({ error: 'query is required' });
+            }
+            this.log('info', 'Search request', { query, limit, algorithm });
+            const results = await this.ragService.search(query, limit, algorithm);
+            return res.json({
+              results: results.map(r => ({
+                chunkId: r.chunkId,
+                documentId: r.documentId,
+                content: r.content,
+                score: r.score,
+                similarity: r.similarity,
+                algorithm: r.algorithm,
+                metadata: r.metadata
+              }))
+            });
+          }
+
+          case 'get_documents': {
+            const documents = this.ragService.getDocuments();
+            return res.json({ documents });
+          }
+
+          case 'get_document_chunks': {
+            const { documentId } = args;
+            if (!documentId) {
+              return res.status(400).json({ error: 'documentId is required' });
+            }
+            const chunks = this.ragService.getDocumentChunks(documentId);
+            return res.json({ chunks });
+          }
+
+          case 'get_chunk': {
+            const { chunkId } = args;
+            if (!chunkId) {
+              return res.status(400).json({ error: 'chunkId is required' });
+            }
+            const chunk = this.ragService.getChunkContent(chunkId);
+            if (!chunk) {
+              return res.status(404).json({ error: 'Chunk not found' });
+            }
+            return res.json({ chunk });
+          }
+
+          case 'get_stats': {
+            const stats = this.ragService.getVectorStoreStats();
+            return res.json({ stats });
+          }
+
+          case 'ingest_file': {
+            const { filePath, watch = false } = args;
+            if (!filePath) {
+              return res.status(400).json({ error: 'filePath is required' });
+            }
+            this.log('info', 'Ingest file request', { filePath, watch });
+            const result = await this.ragService.ingestFile(filePath, watch);
+            return res.json(result);
+          }
+
+          case 'ingest_directory': {
+            const { dirPath, recursive = false, watch = false } = args;
+            if (!dirPath) {
+              return res.status(400).json({ error: 'dirPath is required' });
+            }
+            this.log('info', 'Ingest directory request', { dirPath, recursive, watch });
+            const result = await this.ragService.ingestDirectory(dirPath, recursive, watch);
+            return res.json(result);
+          }
+
+          default:
+            return res.status(404).json({ error: `Unknown tool: ${toolId}` });
+        }
+      } catch (error) {
+        this.log('error', 'Tool invocation error', { toolId, error: error.message });
+        res.status(500).json({ error: error.message });
+      }
     });
 
     // Search tool
@@ -497,10 +690,11 @@ class MCPService extends EventEmitter {
   }
 
   stop() {
-    if (this.restServer) {
+    if (this.httpServer) {
       return new Promise((resolve) => {
-        this.restServer.close(() => {
+        this.httpServer.close(() => {
           this.log('info', 'MCP REST server stopped');
+          this.httpServer = null;
           this.restServer = null;
           this.restPort = null;
           resolve({ status: 'stopped' });
@@ -513,7 +707,7 @@ class MCPService extends EventEmitter {
   getStatus() {
     const baseUrl = this.restPort ? `http://localhost:${this.restPort}` : null;
     return {
-      running: this.restServer !== null,
+      running: this.httpServer !== null,
       port: this.restPort,
       restUrl: baseUrl,
       mcpUrl: baseUrl ? `${baseUrl}/mcp` : null,

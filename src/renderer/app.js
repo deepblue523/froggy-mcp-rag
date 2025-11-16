@@ -1006,19 +1006,22 @@ async function refreshServerStatus() {
     
     // Define available endpoints
     const endpoints = [
-      { method: 'GET', path: '/health', description: 'Health check endpoint' },
-      { method: 'POST', path: '/tools/search', description: 'Search the vector store' },
-      { method: 'GET', path: '/tools/documents', description: 'Get all documents' },
-      { method: 'GET', path: '/tools/documents/:documentId/chunks', description: 'Get chunks for a document' },
-      { method: 'GET', path: '/tools/chunks/:chunkId', description: 'Get chunk content by ID' },
-      { method: 'GET', path: '/tools/stats', description: 'Get vector store statistics' },
-      { method: 'POST', path: '/tools/ingest/file', description: 'Ingest a file' },
-      { method: 'POST', path: '/tools/ingest/directory', description: 'Ingest a directory' },
-      { method: 'POST', path: '/mcp', description: 'MCP Protocol (JSON-RPC 2.0)' }
+      { method: 'GET', path: '/health', description: 'Health check endpoint', requiresPayload: false, requiresParams: false },
+      { method: 'GET', path: '/status', description: 'Check connection status', requiresPayload: false, requiresParams: false },
+      { method: 'GET', path: '/tools', description: 'List all available tools', requiresPayload: false, requiresParams: false },
+      { method: 'POST', path: '/tools/search', description: 'Search the vector store', requiresPayload: true, requiresParams: false },
+      { method: 'GET', path: '/tools/documents', description: 'Get all documents', requiresPayload: false, requiresParams: false },
+      { method: 'GET', path: '/tools/documents/:documentId/chunks', description: 'Get chunks for a document', requiresPayload: false, requiresParams: true, params: [{ name: 'documentId', label: 'Document ID', type: 'text' }] },
+      { method: 'GET', path: '/tools/chunks/:chunkId', description: 'Get chunk content by ID', requiresPayload: false, requiresParams: true, params: [{ name: 'chunkId', label: 'Chunk ID', type: 'text' }] },
+      { method: 'GET', path: '/tools/stats', description: 'Get vector store statistics', requiresPayload: false, requiresParams: false },
+      { method: 'POST', path: '/tools/ingest/file', description: 'Ingest a file', requiresPayload: true, requiresParams: false },
+      { method: 'POST', path: '/tools/ingest/directory', description: 'Ingest a directory', requiresPayload: true, requiresParams: false },
+      { method: 'POST', path: '/tools/:toolId', description: 'Invoke a specific tool w/ args', requiresPayload: true, requiresParams: true, params: [{ name: 'toolId', label: 'Tool ID', type: 'text' }] },
+      { method: 'POST', path: '/mcp', description: 'MCP Protocol (JSON-RPC 2.0)', requiresPayload: true, requiresParams: false }
     ];
     
     endpointsTbody.innerHTML = '';
-    endpoints.forEach(endpoint => {
+    endpoints.forEach((endpoint, index) => {
       const row = document.createElement('tr');
       const methodCell = document.createElement('td');
       methodCell.className = `endpoint-method endpoint-method-${endpoint.method.toLowerCase()}`;
@@ -1032,9 +1035,19 @@ async function refreshServerStatus() {
       descCell.className = 'endpoint-description';
       descCell.textContent = endpoint.description;
       
+      const actionsCell = document.createElement('td');
+      const testBtn = document.createElement('button');
+      testBtn.className = 'btn btn-secondary';
+      testBtn.textContent = 'Test';
+      testBtn.style.fontSize = '12px';
+      testBtn.style.padding = '6px 12px';
+      testBtn.addEventListener('click', () => openEndpointTestModal(endpoint, status.restUrl || `http://localhost:${status.port}`));
+      actionsCell.appendChild(testBtn);
+      
       row.appendChild(methodCell);
       row.appendChild(pathCell);
       row.appendChild(descCell);
+      row.appendChild(actionsCell);
       endpointsTbody.appendChild(row);
     });
   } else {
@@ -1352,4 +1365,451 @@ async function performSelfTest() {
     selfTestBtn.disabled = false;
   }
 }
+
+let currentTestEndpoint = null;
+let currentTestBaseUrl = null;
+// Store event handler for cleanup
+let endpointTestOverlayClickHandler = null;
+let endpointTestEscapeKeyHandler = null;
+
+// Helper functions for persistent test payloads
+async function getEndpointTestPayloads() {
+  const settings = await window.electronAPI.getSettings();
+  return settings.endpointTestPayloads || {};
+}
+
+async function saveEndpointTestPayload(endpointPath, payload, params) {
+  const settings = await window.electronAPI.getSettings();
+  if (!settings.endpointTestPayloads) {
+    settings.endpointTestPayloads = {};
+  }
+  settings.endpointTestPayloads[endpointPath] = {
+    payload: payload,
+    params: params
+  };
+  await window.electronAPI.saveSettings(settings);
+}
+
+async function getDefaultPayload(endpointPath) {
+  let defaultPayload = {};
+  if (endpointPath === '/tools/search') {
+    defaultPayload = { query: 'test query', limit: 10, algorithm: 'hybrid' };
+  } else if (endpointPath === '/tools/ingest/file') {
+    defaultPayload = { filePath: '', watch: false };
+  } else if (endpointPath === '/tools/ingest/directory') {
+    defaultPayload = { dirPath: '', recursive: false, watch: false };
+  } else if (endpointPath === '/tools/:toolId') {
+    defaultPayload = { query: 'test query', limit: 10 };
+  } else if (endpointPath === '/mcp') {
+    defaultPayload = {
+      jsonrpc: '2.0',
+      method: 'initialize',
+      params: {},
+      id: 1
+    };
+  }
+  return defaultPayload;
+}
+
+async function openEndpointTestModal(endpoint, baseUrl) {
+  currentTestEndpoint = endpoint;
+  currentTestBaseUrl = baseUrl;
+  
+  const modal = document.getElementById('endpoint-test-modal');
+  const titleElement = document.getElementById('test-modal-title');
+  const requestView = document.getElementById('test-modal-request-view');
+  const responseView = document.getElementById('test-modal-response-view');
+  const methodSpan = document.getElementById('test-modal-method');
+  const endpointSpan = document.getElementById('test-modal-endpoint');
+  const previewSection = document.getElementById('test-modal-preview-section');
+  const previewContent = document.getElementById('test-modal-preview-content');
+  const paramsSection = document.getElementById('test-modal-params-section');
+  const paramsInputs = document.getElementById('test-modal-params-inputs');
+  const payloadSection = document.getElementById('test-modal-payload-section');
+  const payloadTextarea = document.getElementById('test-modal-payload');
+  const sendBtn = document.getElementById('test-endpoint-send-btn');
+  const cancelBtn = document.getElementById('test-endpoint-cancel-btn');
+  
+  // Show request view, hide response view
+  requestView.style.display = 'block';
+  responseView.style.display = 'none';
+  
+  // Set title and buttons
+  titleElement.textContent = 'Send Request';
+  sendBtn.style.display = 'inline-block';
+  sendBtn.textContent = 'Send';
+  sendBtn.disabled = false;
+  cancelBtn.textContent = 'Cancel';
+  
+  // Set method and endpoint
+  methodSpan.textContent = endpoint.method;
+  endpointSpan.textContent = endpoint.path;
+  
+  // Load saved payloads and params
+  const savedPayloads = await getEndpointTestPayloads();
+  const savedData = savedPayloads[endpoint.path] || {};
+  
+  // Handle parameters (URL path params)
+  if (endpoint.requiresParams && endpoint.params) {
+    paramsSection.style.display = 'block';
+    paramsInputs.innerHTML = '';
+    
+    const paramsResetSection = document.getElementById('test-modal-params-reset-section');
+    paramsResetSection.style.display = 'block';
+    
+    endpoint.params.forEach(param => {
+      const inputGroup = document.createElement('div');
+      inputGroup.style.marginBottom = '10px';
+      
+      const label = document.createElement('label');
+      label.textContent = `${param.label}:`;
+      label.style.display = 'block';
+      label.style.marginBottom = '5px';
+      label.style.fontWeight = '500';
+      
+      const input = document.createElement('input');
+      input.type = param.type || 'text';
+      input.id = `test-param-${param.name}`;
+      input.style.width = '100%';
+      input.style.padding = '8px';
+      input.style.border = '1px solid #ccc';
+      input.style.borderRadius = '4px';
+      input.placeholder = param.placeholder || `Enter ${param.label.toLowerCase()}`;
+      
+      // Load saved parameter value if exists
+      if (savedData.params && savedData.params[param.name] !== undefined) {
+        input.value = savedData.params[param.name];
+      }
+      
+      // Save on blur (when user leaves the field)
+      input.addEventListener('blur', async () => {
+        await saveCurrentTestPayload();
+      });
+      
+      inputGroup.appendChild(label);
+      inputGroup.appendChild(input);
+      paramsInputs.appendChild(inputGroup);
+    });
+  } else {
+    paramsSection.style.display = 'none';
+    document.getElementById('test-modal-params-reset-section').style.display = 'none';
+  }
+  
+  // Handle request payload
+  if (endpoint.requiresPayload) {
+    payloadSection.style.display = 'block';
+    
+    // Load saved payload or use default
+    let payloadToUse;
+    if (savedData.payload) {
+      try {
+        payloadToUse = typeof savedData.payload === 'string' ? JSON.parse(savedData.payload) : savedData.payload;
+      } catch (e) {
+        // If saved payload is invalid JSON, use default
+        payloadToUse = await getDefaultPayload(endpoint.path);
+      }
+    } else {
+      payloadToUse = await getDefaultPayload(endpoint.path);
+    }
+    
+    payloadTextarea.value = JSON.stringify(payloadToUse, null, 2);
+    
+    // Save on blur (when user leaves the textarea) - avoid saving on every keystroke
+    payloadTextarea.addEventListener('blur', async () => {
+      // Validate JSON before saving
+      const text = payloadTextarea.value.trim();
+      if (text) {
+        try {
+          JSON.parse(text);
+          await saveCurrentTestPayload();
+          updateRequestPreview(); // Update preview when payload changes
+        } catch (e) {
+          // Don't save invalid JSON, but don't show error either
+          // User can fix it and it will save on next blur
+        }
+      }
+    });
+  } else {
+    payloadSection.style.display = 'none';
+  }
+  
+  // Update request preview
+  updateRequestPreview();
+  
+  // Add input listeners to update preview
+  if (endpoint.requiresParams && endpoint.params) {
+    endpoint.params.forEach(param => {
+      const input = document.getElementById(`test-param-${param.name}`);
+      if (input) {
+        input.addEventListener('input', updateRequestPreview);
+        input.addEventListener('change', updateRequestPreview);
+      }
+    });
+  }
+  if (payloadTextarea) {
+    payloadTextarea.addEventListener('input', updateRequestPreview);
+  }
+  
+  // Clean up previous event handlers
+  if (endpointTestOverlayClickHandler) {
+    modal.removeEventListener('click', endpointTestOverlayClickHandler);
+  }
+  if (endpointTestEscapeKeyHandler) {
+    document.removeEventListener('keydown', endpointTestEscapeKeyHandler);
+  }
+  
+  // Close on overlay click
+  endpointTestOverlayClickHandler = (e) => {
+    if (e.target === modal) {
+      closeEndpointTestModal();
+    }
+  };
+  modal.addEventListener('click', endpointTestOverlayClickHandler);
+  
+  // Close on Escape key
+  endpointTestEscapeKeyHandler = (e) => {
+    if (e.key === 'Escape') {
+      closeEndpointTestModal();
+    }
+  };
+  document.addEventListener('keydown', endpointTestEscapeKeyHandler);
+  
+  modal.style.display = 'flex';
+}
+
+function updateRequestPreview() {
+  if (!currentTestEndpoint || !currentTestBaseUrl) return;
+  
+  const previewContent = document.getElementById('test-modal-preview-content');
+  if (!previewContent) return;
+  
+  // Build URL with path parameters
+  let url = currentTestBaseUrl + currentTestEndpoint.path;
+  const params = {};
+  
+  if (currentTestEndpoint.requiresParams && currentTestEndpoint.params) {
+    currentTestEndpoint.params.forEach(param => {
+      const input = document.getElementById(`test-param-${param.name}`);
+      if (input) {
+        const value = input.value.trim();
+        params[param.name] = value;
+        if (value) {
+          url = url.replace(`:${param.name}`, encodeURIComponent(value));
+        }
+      }
+    });
+  }
+  
+  let previewHTML = `<div style="margin-bottom: 8px;"><strong>URL:</strong> <span style="color: #1976d2;">${url}</span></div>`;
+  
+  if (currentTestEndpoint.method === 'POST' && currentTestEndpoint.requiresPayload) {
+    const payloadTextarea = document.getElementById('test-modal-payload');
+    if (payloadTextarea) {
+      const payloadText = payloadTextarea.value.trim();
+      if (payloadText) {
+        try {
+          const payload = JSON.parse(payloadText);
+          previewHTML += `<div><strong>Body:</strong></div>`;
+          previewHTML += `<pre style="margin: 4px 0 0 0; padding: 8px; background: white; border: 1px solid #e0e0e0; border-radius: 4px; overflow-x: auto; font-size: 11px;">${JSON.stringify(payload, null, 2)}</pre>`;
+        } catch (e) {
+          previewHTML += `<div style="color: #d32f2f; font-size: 11px; margin-top: 4px;">⚠ Invalid JSON in payload</div>`;
+        }
+      }
+    }
+  }
+  
+  previewContent.innerHTML = previewHTML;
+}
+
+async function saveCurrentTestPayload() {
+  if (!currentTestEndpoint) return;
+  
+  const payloadTextarea = document.getElementById('test-modal-payload');
+  const params = {};
+  
+  // Collect parameter values
+  if (currentTestEndpoint.requiresParams && currentTestEndpoint.params) {
+    currentTestEndpoint.params.forEach(param => {
+      const input = document.getElementById(`test-param-${param.name}`);
+      if (input) {
+        params[param.name] = input.value;
+      }
+    });
+  }
+  
+  // Get payload value
+  let payload = null;
+  if (currentTestEndpoint.requiresPayload && payloadTextarea) {
+    payload = payloadTextarea.value.trim();
+  }
+  
+  await saveEndpointTestPayload(currentTestEndpoint.path, payload, params);
+}
+
+window.resetEndpointTestPayload = async function() {
+  if (!currentTestEndpoint) return;
+  
+  const payloadTextarea = document.getElementById('test-modal-payload');
+  if (!payloadTextarea) return;
+  
+  const defaultPayload = await getDefaultPayload(currentTestEndpoint.path);
+  payloadTextarea.value = JSON.stringify(defaultPayload, null, 2);
+  
+  // Save the reset
+  await saveCurrentTestPayload();
+};
+
+window.resetEndpointTestParams = async function() {
+  if (!currentTestEndpoint || !currentTestEndpoint.requiresParams) return;
+  
+  if (currentTestEndpoint.params) {
+    currentTestEndpoint.params.forEach(param => {
+      const input = document.getElementById(`test-param-${param.name}`);
+      if (input) {
+        input.value = '';
+      }
+    });
+  }
+  
+  // Save the reset
+  await saveCurrentTestPayload();
+};
+
+window.closeEndpointTestModal = function() {
+  const modal = document.getElementById('endpoint-test-modal');
+  if (modal) {
+    modal.style.display = 'none';
+  }
+  
+  // Clean up event handlers
+  if (endpointTestOverlayClickHandler) {
+    modal.removeEventListener('click', endpointTestOverlayClickHandler);
+    endpointTestOverlayClickHandler = null;
+  }
+  if (endpointTestEscapeKeyHandler) {
+    document.removeEventListener('keydown', endpointTestEscapeKeyHandler);
+    endpointTestEscapeKeyHandler = null;
+  }
+  
+  currentTestEndpoint = null;
+  currentTestBaseUrl = null;
+};
+
+window.sendEndpointTest = async function() {
+  if (!currentTestEndpoint || !currentTestBaseUrl) return;
+  
+  const sendBtn = document.getElementById('test-endpoint-send-btn');
+  const requestView = document.getElementById('test-modal-request-view');
+  const responseView = document.getElementById('test-modal-response-view');
+  const titleElement = document.getElementById('test-modal-title');
+  const resultContent = document.getElementById('test-modal-result-content');
+  const responseMethodSpan = document.getElementById('test-modal-response-method');
+  const responseEndpointSpan = document.getElementById('test-modal-response-endpoint');
+  
+  try {
+    // Disable button during request
+    sendBtn.disabled = true;
+    sendBtn.textContent = 'Sending...';
+    
+    // Build URL with path parameters
+    let url = currentTestBaseUrl + currentTestEndpoint.path;
+    if (currentTestEndpoint.requiresParams && currentTestEndpoint.params) {
+      currentTestEndpoint.params.forEach(param => {
+        const input = document.getElementById(`test-param-${param.name}`);
+        const value = input ? input.value.trim() : '';
+        if (!value) {
+          throw new Error(`${param.label} is required`);
+        }
+        url = url.replace(`:${param.name}`, encodeURIComponent(value));
+      });
+    }
+    
+    // Prepare request options
+    const options = {
+      method: currentTestEndpoint.method,
+      headers: {
+        'Content-Type': 'application/json'
+      }
+    };
+    
+    // Add body for POST requests with payload
+    if (currentTestEndpoint.requiresPayload && currentTestEndpoint.method === 'POST') {
+      const payloadTextarea = document.getElementById('test-modal-payload');
+      const payloadText = payloadTextarea.value.trim();
+      
+      if (!payloadText) {
+        throw new Error('Request payload is required');
+      }
+      
+      try {
+        options.body = payloadText;
+        // Validate JSON
+        JSON.parse(payloadText);
+      } catch (e) {
+        throw new Error('Invalid JSON payload: ' + e.message);
+      }
+    }
+    
+    // Make the request
+    const response = await fetch(url, options);
+    
+    // Parse response
+    let responseData;
+    const contentType = response.headers.get('content-type');
+    try {
+      if (contentType && contentType.includes('application/json')) {
+        responseData = await response.json();
+      } else {
+        responseData = await response.text();
+      }
+    } catch (parseError) {
+      responseData = await response.text();
+    }
+    
+    // Switch to response view
+    requestView.style.display = 'none';
+    responseView.style.display = 'block';
+    titleElement.textContent = 'Response';
+    
+    // Hide Send button, rename Cancel to Close
+    sendBtn.style.display = 'none';
+    const cancelBtn = document.getElementById('test-endpoint-cancel-btn');
+    cancelBtn.textContent = 'Close';
+    
+    // Set response details
+    responseMethodSpan.textContent = currentTestEndpoint.method;
+    responseEndpointSpan.textContent = url;
+    
+    // Display result
+    const statusColor = response.ok ? '#2e7d32' : '#d32f2f';
+    const statusText = response.ok ? 'Success' : 'Error';
+    resultContent.innerHTML = `<strong style="color: ${statusColor};">Status:</strong> ${response.status} ${response.statusText} (${statusText})\n\n<strong>Response:</strong>\n${typeof responseData === 'string' ? responseData : JSON.stringify(responseData, null, 2)}`;
+    resultContent.scrollTop = 0;
+    
+    // Save payload and params after successful test
+    await saveCurrentTestPayload();
+    
+  } catch (error) {
+    console.error('Endpoint test error:', error);
+    
+    // Switch to response view even on error
+    requestView.style.display = 'none';
+    responseView.style.display = 'block';
+    titleElement.textContent = 'Response';
+    
+    // Hide Send button, rename Cancel to Close
+    sendBtn.style.display = 'none';
+    const cancelBtn = document.getElementById('test-endpoint-cancel-btn');
+    cancelBtn.textContent = 'Close';
+    
+    // Set response details
+    responseMethodSpan.textContent = currentTestEndpoint.method;
+    const url = currentTestBaseUrl + currentTestEndpoint.path;
+    responseEndpointSpan.textContent = url;
+    
+    // Display error
+    resultContent.innerHTML = `<strong style="color: #d32f2f;">Error:</strong>\n${error.message}`;
+    resultContent.scrollTop = 0;
+  }
+};
 
