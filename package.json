@@ -3,11 +3,16 @@
   "version": "1.0.0",
   "description": "Turnkey RAG system with MCP server and UI",
   "main": "src/main/main.js",
+  "bin": {
+    "froggy-rag-mcp": "./src/cli/mcp-cli.js"
+  },
   "scripts": {
     "start": "electron .",
     "dev": "electron . --dev",
     "build": "electron-builder",
-    "postinstall": "electron-rebuild -f -w better-sqlite3"
+    "postinstall": "electron-rebuild -f -w better-sqlite3",
+    "mcp-stdio": "node src/cli/mcp-cli.js",
+    "mcp": "node src/cli/mcp-cli.js"
   },
   "keywords": [
     "rag",
@@ -30,6 +35,7 @@
     "exceljs": "^4.4.0",
     "express": "^4.18.2",
     "mammoth": "^1.6.0",
+    "marked": "^17.0.0",
     "natural": "^8.1.0",
     "pdf-parse": "^1.1.1",
     "uuid": "^9.0.1"

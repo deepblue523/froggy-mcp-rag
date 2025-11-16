@@ -218,6 +218,17 @@ class VectorStore {
     })();
   }
 
+  clearStore() {
+    // Delete all chunks first (due to foreign key constraint)
+    const deleteAllChunks = this.db.prepare('DELETE FROM chunks');
+    const deleteAllDocs = this.db.prepare('DELETE FROM documents');
+    
+    this.db.transaction(() => {
+      deleteAllChunks.run();
+      deleteAllDocs.run();
+    })();
+  }
+
   close() {
     this.db.close();
   }

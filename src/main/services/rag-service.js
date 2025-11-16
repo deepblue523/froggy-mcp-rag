@@ -677,6 +677,55 @@ class RAGService extends EventEmitter {
       });
     }
   }
+
+  async regenerateVectorStore() {
+    console.log('Regenerating vector store...');
+    
+    // Clear the entire vector store
+    this.vectorStore.clearStore();
+    console.log('Vector store cleared');
+    
+    // Collect all files from current settings
+    const allFilePaths = new Set();
+    
+    // Add files from files list
+    for (const fileEntry of this.settings.files || []) {
+      if (fs.existsSync(fileEntry.path)) {
+        allFilePaths.add(path.resolve(fileEntry.path));
+      }
+    }
+    
+    // Add files from directories
+    for (const dirEntry of this.settings.directories || []) {
+      if (fs.existsSync(dirEntry.path)) {
+        const files = this.findSupportedFiles(dirEntry.path, dirEntry.recursive || false);
+        files.forEach(file => allFilePaths.add(path.resolve(file)));
+      }
+    }
+    
+    // Queue all files for re-indexing
+    let queuedCount = 0;
+    for (const filePath of allFilePaths) {
+      try {
+        if (fs.existsSync(filePath)) {
+          this.addToQueue(filePath, 'file');
+          queuedCount++;
+        }
+      } catch (error) {
+        console.error(`Error queueing file ${filePath}:`, error);
+      }
+    }
+    
+    console.log(`Regeneration queued ${queuedCount} files`);
+    
+    // Emit event to notify UI
+    this.emit('ingestion-update', { 
+      type: 'regenerate-complete', 
+      queued: queuedCount 
+    });
+    
+    return { queued: queuedCount };
+  }
 }
 
 module.exports = { RAGService };

@@ -1,4 +1,6 @@
 const { ipcMain } = require('electron');
+const fs = require('fs');
+const path = require('path');
 
 module.exports = function setupIpcHandlers(ipcMain, ragService, mcpService) {
   // RAG Service handlers
@@ -63,6 +65,10 @@ module.exports = function setupIpcHandlers(ipcMain, ragService, mcpService) {
     return ragService.getVectorStoreStats();
   });
 
+  ipcMain.handle('regenerate-vector-store', async () => {
+    return await ragService.regenerateVectorStore();
+  });
+
   // Search handlers
   ipcMain.handle('search', async (_, query, limit = 10, algorithm = 'hybrid') => {
     return await ragService.search(query, limit, algorithm);
@@ -114,6 +120,18 @@ module.exports = function setupIpcHandlers(ipcMain, ragService, mcpService) {
       return result.filePaths[0];
     }
     return null;
+  });
+
+  // File reading handlers
+  ipcMain.handle('read-usage-file', async () => {
+    try {
+      const usagePath = path.join(__dirname, '..', '..', 'USAGE.md');
+      const content = fs.readFileSync(usagePath, 'utf8');
+      return content;
+    } catch (error) {
+      console.error('Error reading USAGE.md:', error);
+      return null;
+    }
   });
 
   // Setup event forwarding

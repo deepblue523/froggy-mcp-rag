@@ -1,6 +1,8 @@
 // Global state
 let currentCanvas = null;
 let splitterPosition = 250;
+let searchSplitterPosition = 300; // Height for horizontal splitter in search
+let chunkDetailSplitterPosition = 300; // Width for vertical splitter in chunk details
 let mruSearches = [];
 let selectedDocumentId = null;
 let selectedChunkId = null;
@@ -20,6 +22,12 @@ async function initializeApp() {
     splitterPosition = settings.splitterPosition;
     document.getElementById('treePanel').style.width = `${splitterPosition}px`;
   }
+  if (settings.searchSplitterPosition) {
+    searchSplitterPosition = settings.searchSplitterPosition;
+  }
+  if (settings.chunkDetailSplitterPosition) {
+    chunkDetailSplitterPosition = settings.chunkDetailSplitterPosition;
+  }
 
   // Load MRU searches
   if (settings.mruSearches) {
@@ -27,8 +35,10 @@ async function initializeApp() {
     updateMRUList();
   }
 
-  // Setup splitter
+  // Setup splitters
   setupSplitter();
+  setupSearchSplitter();
+  setupChunkDetailSplitter();
 
   // Setup tree navigation
   setupTreeNavigation();
@@ -60,6 +70,17 @@ async function initializeApp() {
 }
 
 function setupEventListeners() {
+  // Help button
+  const helpBtn = document.getElementById('help-btn');
+  if (helpBtn) {
+    helpBtn.addEventListener('click', async () => {
+      console.log('Help button clicked');
+      await showHelpModal();
+    });
+  } else {
+    console.error('Help button element not found when setting up event listeners');
+  }
+
   // File management
   document.getElementById('add-file-btn').addEventListener('click', () => {
     document.getElementById('file-input').click();
@@ -137,6 +158,14 @@ function setupEventListeners() {
     });
   }
 
+  // Regenerate vector store
+  const regenerateVectorStoreBtn = document.getElementById('regenerate-vector-store-btn');
+  if (regenerateVectorStoreBtn) {
+    regenerateVectorStoreBtn.addEventListener('click', async () => {
+      await regenerateVectorStore();
+    });
+  }
+
   // Drag and drop for files
   setupDragAndDrop();
 }
@@ -171,6 +200,144 @@ function setupSplitter() {
       saveSettings();
     }
   });
+}
+
+function setupSearchSplitter() {
+  const splitter = document.getElementById('search-horizontal-splitter');
+  if (!splitter) return;
+  
+  const resultsDiv = document.getElementById('search-results');
+  const detailDiv = document.getElementById('search-chunk-detail');
+  const container = document.getElementById('search-results-container');
+  let isDragging = false;
+
+  splitter.addEventListener('mousedown', (e) => {
+    isDragging = true;
+    splitter.classList.add('dragging');
+    document.body.style.cursor = 'row-resize';
+    e.preventDefault();
+  });
+
+  document.addEventListener('mousemove', (e) => {
+    if (!isDragging) return;
+
+    const containerRect = container.getBoundingClientRect();
+    const relativeY = e.clientY - containerRect.top;
+    
+    // Minimum heights for both panels
+    const minHeight = 100;
+    const maxHeight = containerRect.height - minHeight;
+    
+    if (relativeY >= minHeight && relativeY <= maxHeight) {
+      searchSplitterPosition = relativeY;
+      resultsDiv.style.height = `${relativeY}px`;
+      resultsDiv.style.overflowY = 'auto';
+      resultsDiv.style.flexShrink = '0';
+      detailDiv.style.flex = '1';
+      detailDiv.style.minHeight = '0';
+      detailDiv.style.overflowY = 'auto';
+    }
+  });
+
+  document.addEventListener('mouseup', () => {
+    if (isDragging) {
+      isDragging = false;
+      splitter.classList.remove('dragging');
+      document.body.style.cursor = '';
+      saveSettings();
+    }
+  });
+}
+
+function applySearchSplitterPosition() {
+  const resultsDiv = document.getElementById('search-results');
+  const detailDiv = document.getElementById('search-chunk-detail');
+  const container = document.getElementById('search-results-container');
+  
+  if (resultsDiv && detailDiv && container && container.style.display !== 'none') {
+    const containerHeight = container.getBoundingClientRect().height || container.offsetHeight;
+    if (containerHeight > 0) {
+      // Ensure splitter position is within valid range
+      const minHeight = 100;
+      const maxHeight = containerHeight - minHeight;
+      const adjustedPosition = Math.max(minHeight, Math.min(maxHeight, searchSplitterPosition));
+      
+      resultsDiv.style.height = `${adjustedPosition}px`;
+      resultsDiv.style.overflowY = 'auto';
+      resultsDiv.style.flexShrink = '0';
+      detailDiv.style.flex = '1';
+      detailDiv.style.minHeight = '0';
+      detailDiv.style.overflowY = 'auto';
+    }
+  }
+  applyChunkDetailSplitterPosition();
+}
+
+function setupChunkDetailSplitter() {
+  const splitter = document.getElementById('chunk-detail-vertical-splitter');
+  if (!splitter) return;
+  
+  const textDiv = document.getElementById('search-chunk-content');
+  const metadataDiv = document.getElementById('search-chunk-metadata');
+  const contentDiv = document.querySelector('.chunk-detail-content');
+  let isDragging = false;
+
+  splitter.addEventListener('mousedown', (e) => {
+    isDragging = true;
+    splitter.classList.add('dragging');
+    document.body.style.cursor = 'col-resize';
+    e.preventDefault();
+  });
+
+  document.addEventListener('mousemove', (e) => {
+    if (!isDragging) return;
+
+    if (!contentDiv) return;
+    const contentRect = contentDiv.getBoundingClientRect();
+    const relativeX = e.clientX - contentRect.left;
+    
+    // Minimum widths for both panels
+    const minWidth = 150;
+    const maxWidth = contentRect.width - minWidth;
+    
+    if (relativeX >= minWidth && relativeX <= maxWidth) {
+      chunkDetailSplitterPosition = relativeX;
+      textDiv.style.width = `${relativeX}px`;
+      textDiv.style.flex = '0 0 auto';
+      metadataDiv.style.flex = '1';
+      metadataDiv.style.minWidth = '0';
+    }
+  });
+
+  document.addEventListener('mouseup', () => {
+    if (isDragging) {
+      isDragging = false;
+      splitter.classList.remove('dragging');
+      document.body.style.cursor = '';
+      saveSettings();
+    }
+  });
+}
+
+function applyChunkDetailSplitterPosition() {
+  const textDiv = document.getElementById('search-chunk-content');
+  const metadataDiv = document.getElementById('search-chunk-metadata');
+  const contentDiv = document.querySelector('.chunk-detail-content');
+  
+  if (textDiv && metadataDiv && contentDiv) {
+    const contentWidth = contentDiv.getBoundingClientRect().width || contentDiv.offsetWidth;
+    if (contentWidth > 0) {
+      // Ensure splitter position is within valid range
+      const minWidth = 150;
+      const maxWidth = contentWidth - minWidth;
+      const adjustedPosition = Math.max(minWidth, Math.min(maxWidth, chunkDetailSplitterPosition));
+      
+      textDiv.style.width = `${adjustedPosition}px`;
+      textDiv.style.flex = '0 0 auto';
+      metadataDiv.style.flex = '1';
+      metadataDiv.style.minWidth = '0';
+    }
+  }
 }
 
 function setupTreeNavigation() {
@@ -229,6 +396,8 @@ function showCanvas(canvasName) {
       if (!document.getElementById('mru-dropdown')) {
         setupMRUDropdown();
       }
+      // Apply saved splitter positions
+      applySearchSplitterPosition();
       break;
     case 'server':
       document.getElementById('server-canvas').style.display = 'block';
@@ -743,13 +912,14 @@ async function performSearch() {
   
   // Perform search
   const results = await window.electronAPI.search(query, 10, algorithm);
+  const container = document.getElementById('search-results-container');
   const resultsDiv = document.getElementById('search-results');
   const tbody = document.getElementById('search-results-tbody');
   
   tbody.innerHTML = '';
   
   if (results.length === 0) {
-    tbody.innerHTML = '<tr><td colspan="5" style="text-align: center;">No results found</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="4" style="text-align: center;">No results found</td></tr>';
   } else {
     results.forEach((result, index) => {
       const row = document.createElement('tr');
@@ -776,18 +946,15 @@ async function performSearch() {
         <td><span class="algorithm-badge">${result.algorithm || 'Hybrid'}</span></td>
         <td>${result.metadata?.fileName || 'Unknown'}</td>
         <td>${preview}</td>
-        <td><button class="btn btn-secondary" data-result-index="${index}">View</button></td>
       `;
-      const viewBtn = row.querySelector('button');
-      viewBtn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        showSearchChunkDetail(result.chunkId, result);
-      });
       tbody.appendChild(row);
     });
   }
   
-  resultsDiv.style.display = 'block';
+  container.style.display = 'flex';
+  container.style.flexDirection = 'column';
+  container.style.height = 'calc(100vh - 200px)'; // Adjust based on header and padding
+  applySearchSplitterPosition();
 }
 
 async function showSearchChunkDetail(chunkId, result) {
@@ -796,21 +963,84 @@ async function showSearchChunkDetail(chunkId, result) {
   const metadata = document.getElementById('search-chunk-metadata');
   
   // If result is provided, use it; otherwise fetch from API
-  if (result) {
-    content.textContent = result.content;
-    metadata.textContent = JSON.stringify(result.metadata, null, 2);
-  } else {
-    const chunk = await window.electronAPI.getChunkContent(chunkId);
-    if (chunk) {
-      content.textContent = chunk.content;
-      metadata.textContent = JSON.stringify(chunk.metadata, null, 2);
-    }
+  let chunkData = result;
+  if (!chunkData) {
+    chunkData = await window.electronAPI.getChunkContent(chunkId);
   }
-  detail.style.display = 'block';
+  
+  if (chunkData) {
+    // Set content
+    content.textContent = chunkData.content || '';
+    
+    // Format metadata as key/value grid
+    metadata.innerHTML = '';
+    const metadataItems = [];
+    
+    // Add standard fields
+    if (chunkData.id) metadataItems.push({ label: 'Chunk ID', value: String(chunkData.id) });
+    if (chunkData.chunk_index !== undefined) metadataItems.push({ label: 'Chunk Index', value: String(chunkData.chunk_index) });
+    if (chunkData.document_id) metadataItems.push({ label: 'Document ID', value: String(chunkData.document_id) });
+    if (chunkData.score !== undefined) {
+      let scoreValue = '';
+      if (chunkData.algorithm === 'Vector' || chunkData.algorithm === 'Hybrid') {
+        scoreValue = `${(chunkData.score * 100).toFixed(4)}%`;
+      } else {
+        scoreValue = chunkData.score.toFixed(4);
+      }
+      metadataItems.push({ label: 'Score', value: scoreValue });
+    }
+    if (chunkData.algorithm) metadataItems.push({ label: 'Algorithm', value: String(chunkData.algorithm) });
+    
+    // Add metadata from result.metadata or chunkData.metadata object
+    const metadataObj = chunkData.metadata || {};
+    Object.entries(metadataObj).forEach(([key, value]) => {
+      let stringValue;
+      if (value === null || value === undefined) {
+        stringValue = 'N/A';
+      } else if (typeof value === 'object') {
+        stringValue = JSON.stringify(value, null, 2);
+      } else {
+        stringValue = String(value);
+      }
+      metadataItems.push({
+        label: key,
+        value: stringValue
+      });
+    });
+    
+    // Render metadata items in a grid
+    metadataItems.forEach(item => {
+      const itemDiv = document.createElement('div');
+      itemDiv.className = 'search-chunk-metadata-item';
+      
+      const label = document.createElement('div');
+      label.className = 'search-chunk-metadata-label';
+      label.textContent = item.label + ':';
+      
+      const value = document.createElement('div');
+      value.className = 'search-chunk-metadata-value';
+      const stringValue = String(item.value || '');
+      if (stringValue.length > 100 || stringValue.includes('\n')) {
+        const pre = document.createElement('pre');
+        pre.textContent = stringValue;
+        value.appendChild(pre);
+      } else {
+        value.textContent = stringValue;
+      }
+      
+      itemDiv.appendChild(label);
+      itemDiv.appendChild(value);
+      metadata.appendChild(itemDiv);
+    });
+    
+    // Apply splitter position after content is loaded
+    setTimeout(() => applyChunkDetailSplitterPosition(), 0);
+  }
 }
 
 window.closeSearchChunkDetail = function() {
-  document.getElementById('search-chunk-detail').style.display = 'none';
+  // Don't hide the detail panel, just clear it or keep it visible
+  // The splitter should remain visible
 };
 
 function updateMRUList() {
@@ -1202,6 +1432,8 @@ function formatBytes(bytes) {
 async function saveSettings() {
   const settings = await window.electronAPI.getSettings();
   settings.splitterPosition = splitterPosition;
+  settings.searchSplitterPosition = searchSplitterPosition;
+  settings.chunkDetailSplitterPosition = chunkDetailSplitterPosition;
   settings.mruSearches = mruSearches;
   await window.electronAPI.saveSettings(settings);
 }
@@ -1252,6 +1484,12 @@ async function loadSettings() {
   if (settings.splitterPosition) {
     splitterPosition = settings.splitterPosition;
     document.getElementById('treePanel').style.width = `${splitterPosition}px`;
+  }
+  if (settings.searchSplitterPosition) {
+    searchSplitterPosition = settings.searchSplitterPosition;
+  }
+  if (settings.chunkDetailSplitterPosition) {
+    chunkDetailSplitterPosition = settings.chunkDetailSplitterPosition;
   }
   if (settings.mruSearches) {
     mruSearches = settings.mruSearches;
@@ -1313,6 +1551,49 @@ async function saveChunkingSettings() {
     btn.textContent = originalText;
     btn.style.background = '';
   }, 2000);
+}
+
+async function regenerateVectorStore() {
+  const btn = document.getElementById('regenerate-vector-store-btn');
+  if (!btn) return;
+  
+  // Confirm action
+  const confirmed = confirm('This will clear the entire vector store and re-index all files from your current files/directories settings. This action cannot be undone. Continue?');
+  if (!confirmed) {
+    return;
+  }
+  
+  try {
+    // Disable button during operation
+    btn.disabled = true;
+    const originalText = btn.textContent;
+    btn.textContent = 'Regenerating...';
+    
+    // Call the regenerate function
+    const result = await window.electronAPI.regenerateVectorStore();
+    
+    // Show success message
+    btn.textContent = `✓ Queued ${result.queued} files`;
+    btn.style.background = '#4caf50';
+    
+    // Refresh the vector store view
+    await refreshVectorStore();
+    
+    // Reset button after a delay
+    setTimeout(() => {
+      btn.textContent = originalText;
+      btn.style.background = '';
+      btn.disabled = false;
+    }, 3000);
+  } catch (error) {
+    console.error('Error regenerating vector store:', error);
+    alert(`Error regenerating vector store: ${error.message}`);
+    
+    // Reset button on error
+    btn.textContent = 'Regenerate Vector Store';
+    btn.style.background = '';
+    btn.disabled = false;
+  }
 }
 
 async function performSelfTest() {
@@ -1694,6 +1975,101 @@ window.closeEndpointTestModal = function() {
   currentTestEndpoint = null;
   currentTestBaseUrl = null;
 };
+
+// Help Modal Functions
+async function showHelpModal() {
+  try {
+    console.log('showHelpModal called');
+    const content = await window.electronAPI.readUsageFile();
+    console.log('Content loaded:', content ? `${content.length} characters` : 'null');
+    
+    if (!content) {
+      alert('Could not load user guide. Please check if USAGE.md exists.');
+      return;
+    }
+    
+    const modal = document.getElementById('help-modal-overlay');
+    const contentDiv = document.getElementById('markdown-content');
+    
+    if (!modal) {
+      console.error('Help modal element not found');
+      alert('Help modal element not found');
+      return;
+    }
+    
+    if (!contentDiv) {
+      console.error('Markdown content element not found');
+      alert('Markdown content element not found');
+      return;
+    }
+    
+    // Check if renderMarkdown is available
+    if (!window.electronAPI || !window.electronAPI.renderMarkdown) {
+      console.error('renderMarkdown function not available');
+      alert('Markdown renderer not available');
+      return;
+    }
+    
+    // Convert markdown to HTML using marked library
+    console.log('Rendering markdown...');
+    const html = window.electronAPI.renderMarkdown(content);
+    console.log('Markdown rendered:', html ? `${html.length} characters` : 'null');
+    contentDiv.innerHTML = html;
+    
+    // Clean up previous event handlers
+    if (helpModalOverlayClickHandler) {
+      modal.removeEventListener('click', helpModalOverlayClickHandler);
+    }
+    if (helpModalEscapeKeyHandler) {
+      document.removeEventListener('keydown', helpModalEscapeKeyHandler);
+    }
+    
+    // Close on overlay click
+    helpModalOverlayClickHandler = (e) => {
+      if (e.target === modal) {
+        closeHelpModal();
+      }
+    };
+    modal.addEventListener('click', helpModalOverlayClickHandler);
+    
+    // Close on Escape key
+    helpModalEscapeKeyHandler = (e) => {
+      if (e.key === 'Escape') {
+        closeHelpModal();
+      }
+    };
+    document.addEventListener('keydown', helpModalEscapeKeyHandler);
+    
+    console.log('Showing modal...');
+    modal.style.display = 'flex';
+  } catch (error) {
+    console.error('Error showing help modal:', error);
+    alert('Error loading user guide: ' + error.message);
+  }
+}
+
+let helpModalOverlayClickHandler = null;
+let helpModalEscapeKeyHandler = null;
+
+window.closeHelpModal = function() {
+  const modal = document.getElementById('help-modal-overlay');
+  if (modal) {
+    modal.style.display = 'none';
+  }
+  
+  // Clean up event handlers
+  if (helpModalOverlayClickHandler) {
+    modal.removeEventListener('click', helpModalOverlayClickHandler);
+    helpModalOverlayClickHandler = null;
+  }
+  if (helpModalEscapeKeyHandler) {
+    document.removeEventListener('keydown', helpModalEscapeKeyHandler);
+    helpModalEscapeKeyHandler = null;
+  }
+};
+
+// Markdown rendering is now handled by the marked library via electronAPI.renderMarkdown()
+// The old convertMarkdownToHTML function has been removed in favor of marked
 
 window.sendEndpointTest = async function() {
   if (!currentTestEndpoint || !currentTestBaseUrl) return;

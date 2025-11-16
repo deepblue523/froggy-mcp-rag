@@ -118,7 +118,8 @@ function createWindow() {
       contextIsolation: true,
       preload: path.join(__dirname, 'preload.js')
     },
-    title: 'Froggy RAG MCP'
+    title: 'Froggy RAG MCP',
+    autoHideMenuBar: true
   });
 
   mainWindow.loadFile(path.join(__dirname, '..', 'renderer', 'index.html'));

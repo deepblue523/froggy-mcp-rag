@@ -125,7 +125,10 @@ This includes:
 
 ## MCP Server
 
-The MCP server provides both stdio and REST interfaces for integration with external applications.
+The MCP server provides three interfaces for integration with external applications:
+1. **REST API** - HTTP server for UI and external HTTP clients
+2. **Stdio Mode** - Standard input/output for MCP clients (Claude Desktop, etc.)
+3. **CLI Tool Mode** - Command-line interface for direct tool execution
 
 ### REST API
 
@@ -134,11 +137,105 @@ The REST server runs on a configurable port (default: 3000) and provides endpoin
 - Vector store operations
 - RAG queries
 
+Start/stop the server from the UI, configure the server port, and view real-time logs of server activity.
+
+### Stdio Mode (For MCP Clients)
+
+Stdio mode allows MCP clients (like Claude Desktop) to spawn the server as a subprocess and communicate via stdin/stdout using JSON-RPC 2.0 protocol.
+
+**Usage:**
+```bash
+# Run in stdio mode (no arguments)
+npm run mcp-stdio
+
+# Or directly
+node src/cli/mcp-cli.js
+```
+
+**Configuration for MCP Clients:**
+
+For Claude Desktop, add to your MCP configuration file:
+```json
+{
+  "mcpServers": {
+    "froggy-rag": {
+      "command": "node",
+      "args": ["path/to/froggy-nobs-mcp-rag/src/cli/mcp-cli.js"],
+      "env": {}
+    }
+  }
+}
+```
+
+The server reads JSON-RPC 2.0 messages line-by-line from stdin and writes responses to stdout.
+
+### CLI Tool Mode
+
+CLI tool mode allows you to execute MCP tools directly from the command line.
+
+**Usage:**
+```bash
+# List all available tools
+npm run mcp tools list
+
+# Call a tool with parameters
+npm run mcp call search --query "example query" --limit 5
+
+# Search directly (shortcut)
+npm run mcp search "example query" --limit 10 --algorithm hybrid
+
+# Get statistics
+npm run mcp stats
+
+# Ingest a file
+npm run mcp call ingest_file --filePath "/path/to/file.pdf"
+
+# Get help
+npm run mcp help
+```
+
+**Commands:**
+- `tools list` - List all available tools
+- `call <tool-name> [--arg key=value] ...` - Call a tool with parameters
+- `search <query> [--limit N] [--algorithm]` - Search the vector store (shortcut)
+- `stats` - Get vector store statistics
+- `help` - Show help message
+
+**Examples:**
+```bash
+# List tools
+node src/cli/mcp-cli.js tools list
+
+# Search with hybrid algorithm
+node src/cli/mcp-cli.js search "machine learning" --limit 10 --algorithm hybrid
+
+# Get all documents
+node src/cli/mcp-cli.js call get_documents
+
+# Get chunks for a document
+node src/cli/mcp-cli.js call get_document_chunks --documentId "doc-123"
+
+# Ingest directory with watching
+node src/cli/mcp-cli.js call ingest_directory --dirPath "/path/to/docs" --recursive true --watch true
+```
+
+### Available Tools
+
+All modes support the same set of tools:
+- `search` - Search the vector store for similar content
+- `get_documents` - Get all documents in the vector store
+- `get_document_chunks` - Get chunks for a specific document
+- `get_chunk` - Get chunk content by ID
+- `get_stats` - Get vector store statistics
+- `ingest_file` - Ingest a file into the vector store
+- `ingest_directory` - Ingest a directory into the vector store
+
 ### Server Management
 
-- Start/stop the server from the UI
+- Start/stop the REST server from the UI
 - Configure the server port
 - View real-time logs of server activity
+- Stdio and CLI modes run independently of the Electron UI
 
 ## Development
 
