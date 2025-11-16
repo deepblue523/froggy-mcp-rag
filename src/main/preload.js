@@ -1,37 +1,5 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
-// Import marked safely
-let marked;
-try {
-  marked = require('marked');
-  // Configure marked for v17 API
-  if (marked) {
-    // In marked v4+, use marked.use() for configuration
-    if (typeof marked.use === 'function') {
-      marked.use({
-        breaks: true,
-        gfm: true
-      });
-    } else if (typeof marked.setOptions === 'function') {
-      // Fallback for older API
-      marked.setOptions({
-        breaks: true,
-        gfm: true
-      });
-    }
-  }
-} catch (error) {
-  console.error('Error loading marked:', error);
-  // Fallback: create a simple marked-like function
-  marked = {
-    parse: (text) => {
-      return text ? `<p>${text.replace(/\n/g, '<br>')}</p>` : '<p>No content</p>';
-    },
-    use: () => {},
-    setOptions: () => {}
-  };
-}
-
 contextBridge.exposeInMainWorld('electronAPI', {
   // Data directory
   getDataDir: () => ipcRenderer.invoke('get-data-dir'),
@@ -47,6 +15,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   removeDirectory: (dirPath) => ipcRenderer.invoke('remove-directory', dirPath),
   updateFileWatch: (filePath, watch) => ipcRenderer.invoke('update-file-watch', filePath, watch),
   updateDirectoryWatch: (dirPath, watch, recursive) => ipcRenderer.invoke('update-directory-watch', dirPath, watch, recursive),
+  updateFileActive: (filePath, active) => ipcRenderer.invoke('update-file-active', filePath, active),
+  updateDirectoryActive: (dirPath, active) => ipcRenderer.invoke('update-directory-active', dirPath, active),
   
   // Vector Store
   getDocuments: () => ipcRenderer.invoke('get-documents'),
@@ -75,36 +45,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Dialogs
   showDirectoryDialog: () => ipcRenderer.invoke('show-directory-dialog'),
   
-  // File reading
+  // File reading - now returns HTML directly
   readUsageFile: () => ipcRenderer.invoke('read-usage-file'),
   
   // Path checking
   isDirectory: (filePath) => ipcRenderer.invoke('is-directory', filePath),
-  
-  // Markdown rendering
-  renderMarkdown: (markdown) => {
-    try {
-      if (!markdown) {
-        return '<p>No content available</p>';
-      }
-      // Ensure marked is available and has parse method
-      if (!marked || typeof marked.parse !== 'function') {
-        console.error('Marked library not available or parse method missing');
-        // Basic fallback: escape HTML and convert newlines to <br>
-        return '<p>' + String(markdown).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\n/g, '<br>') + '</p>';
-      }
-      const html = marked.parse(markdown);
-      // Verify we got HTML, not plain text
-      if (typeof html !== 'string' || html === markdown) {
-        console.error('Marked parse did not convert markdown to HTML');
-        return '<p>' + String(markdown).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\n/g, '<br>') + '</p>';
-      }
-      return html;
-    } catch (error) {
-      console.error('Error rendering markdown:', error);
-      return `<p>Error rendering markdown: ${error.message}</p>`;
-    }
-  },
   
   // Events
   onIngestionUpdate: (callback) => {

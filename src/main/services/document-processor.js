@@ -7,8 +7,9 @@ const ExcelJS = require('exceljs');
 const natural = require('natural');
 
 class DocumentProcessor {
-  constructor(embeddingModel) {
+  constructor(embeddingModel, normalizeEmbeddings = true) {
     this.embeddingModel = embeddingModel;
+    this.normalizeEmbeddings = normalizeEmbeddings;
     // Initialize tokenizer from natural library for consistency with search
     this.tokenizer = new natural.WordTokenizer();
   }
@@ -76,7 +77,7 @@ class DocumentProcessor {
     }
   }
 
-  async chunkContent(content, metadata, chunkSize = 1000, overlap = 200) {
+  async chunkContent(content, metadata, chunkSize = 1000, overlap = 200, minChunkChars = 0, minChunkTokens = 0, maxChunksPerDocument = 0) {
     // Intelligent chunking with overlap
     const chunks = [];
     const sentences = this.splitIntoSentences(content);
@@ -89,9 +90,10 @@ class DocumentProcessor {
       
       if (currentLength + sentenceLength > chunkSize && currentChunk.length > 0) {
         // Save current chunk
+        const chunkContent = currentChunk.join(' ');
         chunks.push({
           id: uuidv4(),
-          content: currentChunk.join(' '),
+          content: chunkContent,
           chunkIndex: chunks.length,
           metadata: { ...metadata, chunkType: 'text' }
         });
@@ -108,26 +110,56 @@ class DocumentProcessor {
 
     // Add final chunk
     if (currentChunk.length > 0) {
+      const chunkContent = currentChunk.join(' ');
       chunks.push({
         id: uuidv4(),
-        content: currentChunk.join(' '),
+        content: chunkContent,
         chunkIndex: chunks.length,
         metadata: { ...metadata, chunkType: 'text' }
       });
     }
 
+    // Filter chunks by minimum size (chars and tokens)
+    let filteredChunks = chunks.filter(chunk => {
+      const content = chunk.content;
+      const charCount = content.length;
+      const tokens = this.tokenizer.tokenize(content) || [];
+      const tokenCount = tokens.length;
+      
+      // Check minimum character count
+      if (minChunkChars > 0 && charCount < minChunkChars) {
+        return false;
+      }
+      
+      // Check minimum token count
+      if (minChunkTokens > 0 && tokenCount < minChunkTokens) {
+        return false;
+      }
+      
+      return true;
+    });
+
+    // Limit chunks per document if maxChunksPerDocument is set
+    if (maxChunksPerDocument > 0 && filteredChunks.length > maxChunksPerDocument) {
+      filteredChunks = filteredChunks.slice(0, maxChunksPerDocument);
+      // Update chunk indices
+      filteredChunks.forEach((chunk, index) => {
+        chunk.chunkIndex = index;
+      });
+    }
+
     // Generate embeddings for chunks
     if (this.embeddingModel) {
-      for (const chunk of chunks) {
+      for (const chunk of filteredChunks) {
         try {
-          chunk.embedding = await this.generateEmbedding(chunk.content);
+          chunk.embedding = await this.generateEmbedding(chunk.content, this.normalizeEmbeddings);
         } catch (error) {
           console.error(`Error generating embedding for chunk ${chunk.id}:`, error);
         }
       }
     }
 
-    return chunks;
+    return filteredChunks;
   }
 
   splitIntoSentences(text) {
@@ -143,7 +175,7 @@ class DocumentProcessor {
     return sentences;
   }
 
-  async generateEmbedding(text) {
+  async generateEmbedding(text, normalize = true) {
     if (!this.embeddingModel) {
       // Fallback: simple token-based embedding (not ideal, but works without model)
       return this.simpleEmbedding(text);
@@ -151,7 +183,17 @@ class DocumentProcessor {
 
     try {
       const output = await this.embeddingModel(text);
-      return Array.from(output.data);
+      let embedding = Array.from(output.data);
+      
+      // Normalize if requested (L2 normalization)
+      if (normalize) {
+        const norm = Math.sqrt(embedding.reduce((sum, val) => sum + val * val, 0));
+        if (norm > 0) {
+          embedding = embedding.map(val => val / norm);
+        }
+      }
+      
+      return embedding;
     } catch (error) {
       console.error('Error generating embedding:', error);
       return this.simpleEmbedding(text);

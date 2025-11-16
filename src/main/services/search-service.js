@@ -281,21 +281,204 @@ class SearchService {
   }
 
   /**
+   * Estimate token count (rough approximation: 1 token ≈ 4 characters)
+   */
+  estimateTokenCount(text) {
+    if (!text || typeof text !== 'string') return 0;
+    return Math.ceil(text.length / 4);
+  }
+
+  /**
+   * Calculate time decay factor for a chunk based on its creation timestamp
+   * Uses exponential decay: decay_factor = 2^(-age_days / half_life_days)
+   * @param {number} chunkCreatedAt - Timestamp when chunk was created (milliseconds)
+   * @param {number} halfLifeDays - Number of days for half-life
+   * @returns {number} Decay factor between 0 and 1
+   */
+  calculateTimeDecay(chunkCreatedAt, halfLifeDays) {
+    if (!chunkCreatedAt || !halfLifeDays || halfLifeDays <= 0) {
+      return 1.0; // No decay if invalid parameters
+    }
+    
+    const now = Date.now();
+    const ageMs = now - chunkCreatedAt;
+    const ageDays = ageMs / (1000 * 60 * 60 * 24);
+    
+    // Exponential decay: 2^(-age/half_life)
+    // This means after half_life days, the factor is 0.5
+    // After 2*half_life days, the factor is 0.25, etc.
+    const decayFactor = Math.pow(2, -ageDays / halfLifeDays);
+    
+    // Clamp between 0 and 1
+    return Math.max(0, Math.min(1, decayFactor));
+  }
+
+  /**
+   * Apply time range filtering to chunks
+   * Filters out chunks from documents that haven't been updated within the specified days
+   * @param {Array} chunks - Array of chunks with document_id
+   * @param {number} sinceDays - Number of days to look back (0 = no filter)
+   * @param {Map} documentMap - Map of document_id -> document (with updated_at)
+   * @returns {Array} Filtered chunks
+   */
+  applyTimeRangeFilter(chunks, sinceDays, documentMap) {
+    if (!sinceDays || sinceDays <= 0) {
+      return chunks; // No filtering if sinceDays is 0 or invalid
+    }
+    
+    const cutoffTime = Date.now() - (sinceDays * 24 * 60 * 60 * 1000);
+    
+    return chunks.filter(chunk => {
+      const doc = documentMap.get(chunk.document_id);
+      if (!doc || !doc.updated_at) {
+        return true; // Keep chunks if we can't determine document age
+      }
+      
+      // Keep chunks from documents updated within the time range
+      return doc.updated_at >= cutoffTime;
+    });
+  }
+
+  /**
+   * Apply time decay to search results
+   * Multiplies similarity scores by time decay factor
+   * @param {Array} results - Search results with chunks
+   * @param {boolean} enabled - Whether time decay is enabled
+   * @param {number} halfLifeDays - Half-life in days
+   * @returns {Array} Results with decayed scores
+   */
+  applyTimeDecay(results, enabled, halfLifeDays) {
+    if (!enabled || !halfLifeDays || halfLifeDays <= 0) {
+      return results; // No decay if disabled or invalid
+    }
+    
+    return results.map(result => {
+      // Use chunk's created_at if available, otherwise use current time
+      const chunkCreatedAt = result.created_at || Date.now();
+      const decayFactor = this.calculateTimeDecay(chunkCreatedAt, halfLifeDays);
+      
+      return {
+        ...result,
+        score: result.score * decayFactor,
+        originalScore: result.score, // Keep original for reference
+        decayFactor: decayFactor
+      };
+    });
+  }
+
+  /**
+   * Apply retrieval settings to search results
+   */
+  applyRetrievalSettings(results, settings = {}) {
+    let filtered = [...results];
+    
+    // Apply score threshold
+    if (settings.scoreThreshold && settings.scoreThreshold > 0) {
+      filtered = filtered.filter(r => r.score >= settings.scoreThreshold);
+    }
+    
+    // Apply max chunks per document
+    if (settings.maxChunksPerDoc && settings.maxChunksPerDoc > 0) {
+      const docChunkCounts = new Map();
+      filtered = filtered.filter(r => {
+        const docId = r.document_id;
+        const count = docChunkCounts.get(docId) || 0;
+        if (count < settings.maxChunksPerDoc) {
+          docChunkCounts.set(docId, count + 1);
+          return true;
+        }
+        return false;
+      });
+    }
+    
+    // Apply max context tokens (cap top_k dynamically)
+    if (settings.maxContextTokens && settings.maxContextTokens > 0) {
+      let totalTokens = 0;
+      filtered = filtered.filter(r => {
+        const chunkTokens = this.estimateTokenCount(r.content);
+        if (totalTokens + chunkTokens <= settings.maxContextTokens) {
+          totalTokens += chunkTokens;
+          return true;
+        }
+        return false;
+      });
+    }
+    
+    // Group by document if enabled
+    if (settings.groupByDoc) {
+      const docGroups = new Map();
+      filtered.forEach(r => {
+        const docId = r.document_id;
+        if (!docGroups.has(docId)) {
+          docGroups.set(docId, []);
+        }
+        docGroups.get(docId).push(r);
+      });
+      
+      // Return grouped results (one entry per document with all its chunks)
+      filtered = Array.from(docGroups.entries()).map(([docId, chunks]) => {
+        const firstChunk = chunks[0];
+        return {
+          id: firstChunk.id, // Keep first chunk ID for compatibility
+          document_id: docId,
+          content: firstChunk.content, // Keep first chunk content for compatibility
+          chunks: chunks,
+          score: Math.max(...chunks.map(c => c.score)), // Use max score for document
+          algorithm: chunks[0]?.algorithm || 'Unknown',
+          metadata: firstChunk.metadata || {}
+        };
+      });
+    }
+    
+    // Return full documents if enabled (requires access to document store)
+    // This is handled at the RAG service level since we need document info
+    
+    return filtered;
+  }
+
+  /**
    * Main search method - uses hybrid by default
    */
-  async search(query, queryEmbedding, chunks, limit = 10, algorithm = 'hybrid') {
+  async search(query, queryEmbedding, chunks, limit = 10, algorithm = 'hybrid', retrievalSettings = {}, metadataSettings = {}, documentMap = null) {
+    let filteredChunks = chunks;
+    
+    // Apply time range filtering before search (if documentMap is provided)
+    if (metadataSettings.sinceDays && documentMap) {
+      filteredChunks = this.applyTimeRangeFilter(chunks, metadataSettings.sinceDays, documentMap);
+    }
+    
+    // Perform search on filtered chunks
+    let results;
     switch (algorithm.toLowerCase()) {
       case 'bm25':
-        return this.searchBM25(query, chunks, limit);
+        results = this.searchBM25(query, filteredChunks, limit);
+        break;
       case 'tfidf':
       case 'tf-idf':
-        return this.searchTFIDF(query, chunks, limit);
+        results = this.searchTFIDF(query, filteredChunks, limit);
+        break;
       case 'vector':
-        return this.searchVector(queryEmbedding, chunks, limit);
+        results = this.searchVector(queryEmbedding, filteredChunks, limit);
+        break;
       case 'hybrid':
       default:
-        return this.searchHybrid(query, queryEmbedding, chunks, limit);
+        results = this.searchHybrid(query, queryEmbedding, filteredChunks, limit);
+        break;
     }
+    
+    // Apply time decay to results (multiplies scores by decay factor)
+    if (metadataSettings.timeDecayEnabled && metadataSettings.timeDecayHalfLifeDays) {
+      results = this.applyTimeDecay(results, metadataSettings.timeDecayEnabled, metadataSettings.timeDecayHalfLifeDays);
+      // Re-sort after applying decay (scores may have changed)
+      results = results.sort((a, b) => b.score - a.score);
+    }
+    
+    // Apply retrieval settings (score threshold, max chunks per doc, etc.)
+    if (Object.keys(retrievalSettings).length > 0) {
+      results = this.applyRetrievalSettings(results, retrievalSettings);
+    }
+    
+    return results;
   }
 }
 

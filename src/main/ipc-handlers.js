@@ -44,6 +44,14 @@ module.exports = function setupIpcHandlers(ipcMain, ragService, mcpService) {
     return ragService.updateDirectoryWatch(dirPath, watch, recursive);
   });
 
+  ipcMain.handle('update-file-active', (_, filePath, active) => {
+    return ragService.updateFileActive(filePath, active);
+  });
+
+  ipcMain.handle('update-directory-active', (_, dirPath, active) => {
+    return ragService.updateDirectoryActive(dirPath, active);
+  });
+
   // Vector Store handlers
   ipcMain.handle('get-documents', () => {
     return ragService.getDocuments();
@@ -122,14 +130,26 @@ module.exports = function setupIpcHandlers(ipcMain, ragService, mcpService) {
     return null;
   });
 
-  // File reading handlers
+  // File reading handlers - now reads HTML directly
   ipcMain.handle('read-usage-file', async () => {
     try {
-      const usagePath = path.join(__dirname, '..', '..', 'USAGE.md');
-      const content = fs.readFileSync(usagePath, 'utf8');
-      return content;
+      // Try HTML file first, fallback to MD if needed
+      const htmlPath = path.join(__dirname, '..', '..', 'USAGE.html');
+      const mdPath = path.join(__dirname, '..', '..', 'USAGE.md');
+      
+      if (fs.existsSync(htmlPath)) {
+        const content = fs.readFileSync(htmlPath, 'utf8');
+        return content;
+      } else if (fs.existsSync(mdPath)) {
+        // Fallback: if HTML doesn't exist, try MD (for backwards compatibility)
+        const content = fs.readFileSync(mdPath, 'utf8');
+        return content;
+      } else {
+        console.error('Neither USAGE.html nor USAGE.md found');
+        return null;
+      }
     } catch (error) {
-      console.error('Error reading USAGE.md:', error);
+      console.error('Error reading usage file:', error);
       return null;
     }
   });

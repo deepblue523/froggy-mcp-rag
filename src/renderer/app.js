@@ -126,13 +126,10 @@ function setupEventListeners() {
 
   // Server controls
   document.getElementById('start-server-btn').addEventListener('click', async () => {
-    const port = parseInt(document.getElementById('server-port').value) || 3000;
+    const settings = await window.electronAPI.getSettings();
+    const port = settings.serverPort || 3000;
     try {
       await window.electronAPI.startMCPServer(port);
-      // Save port for auto-start
-      const settings = await window.electronAPI.getSettings();
-      settings.serverPort = port;
-      await window.electronAPI.saveSettings(settings);
       await refreshServerStatus();
     } catch (error) {
       alert(`Error starting server: ${error.message}`);
@@ -152,17 +149,35 @@ function setupEventListeners() {
     await performSelfTest();
   });
 
-  // Auto-start checkbox
-  const autoStartCheckbox = document.getElementById('auto-start-server-checkbox');
-  autoStartCheckbox.addEventListener('change', async (e) => {
-    await saveAutoStartSetting(e.target.checked);
-  });
-
   // Chunking settings (in settings modal)
   const saveChunkingSettingsBtn = document.getElementById('settings-save-chunking-settings-btn');
   if (saveChunkingSettingsBtn) {
     saveChunkingSettingsBtn.addEventListener('click', async () => {
       await saveChunkingSettings();
+    });
+  }
+
+  // Retrieval settings (in settings modal)
+  const saveRetrievalSettingsBtn = document.getElementById('settings-save-retrieval-settings-btn');
+  if (saveRetrievalSettingsBtn) {
+    saveRetrievalSettingsBtn.addEventListener('click', async () => {
+      await saveRetrievalSettings();
+    });
+  }
+
+  // Metadata & Filtering settings (in settings modal)
+  const saveMetadataFilteringSettingsBtn = document.getElementById('settings-save-metadata-filtering-settings-btn');
+  if (saveMetadataFilteringSettingsBtn) {
+    saveMetadataFilteringSettingsBtn.addEventListener('click', async () => {
+      await saveMetadataFilteringSettings();
+    });
+  }
+
+  // Server settings (in settings modal)
+  const saveServerSettingsBtn = document.getElementById('settings-save-server-settings-btn');
+  if (saveServerSettingsBtn) {
+    saveServerSettingsBtn.addEventListener('click', async () => {
+      await saveServerSettings();
     });
   }
 
@@ -413,7 +428,6 @@ function showCanvas(canvasName) {
       document.getElementById('server-canvas').style.display = 'block';
       refreshServerStatus();
       refreshServerLogs();
-      loadAutoStartSetting();
       break;
   }
 }
@@ -428,7 +442,8 @@ async function refreshFiles() {
   files.forEach(file => {
     const row = document.createElement('tr');
     const queueItem = status.queue.find(q => q.filePath === file.path);
-    const fileStatus = queueItem ? queueItem.status : 'completed';
+    // If file is inactive, show "inactive" status, otherwise show queue status or "completed"
+    const fileStatus = file.active === false ? 'inactive' : (queueItem ? queueItem.status : 'completed');
     
     // Escape HTML and JavaScript in file path
     const escapedPath = file.path.replace(/'/g, "\\'").replace(/"/g, '&quot;');
@@ -436,14 +451,21 @@ async function refreshFiles() {
     row.innerHTML = `
       <td>${file.path}</td>
       <td><span class="status-badge status-${fileStatus}">${fileStatus}</span></td>
+      <td><input type="checkbox" ${file.active !== false ? 'checked' : ''} 
+          data-file-path="${escapedPath}" class="file-active-checkbox" /></td>
       <td><input type="checkbox" ${file.watch ? 'checked' : ''} 
           data-file-path="${escapedPath}" class="file-watch-checkbox" /></td>
       <td><button class="btn btn-danger remove-file-btn" data-file-path="${escapedPath}">Remove</button></td>
     `;
     
     // Add event listeners
-    const checkbox = row.querySelector('.file-watch-checkbox');
-    checkbox.addEventListener('change', async (e) => {
+    const activeCheckbox = row.querySelector('.file-active-checkbox');
+    activeCheckbox.addEventListener('change', async (e) => {
+      await window.updateFileActive(file.path, e.target.checked);
+    });
+    
+    const watchCheckbox = row.querySelector('.file-watch-checkbox');
+    watchCheckbox.addEventListener('change', async (e) => {
       await window.updateFileWatch(file.path, e.target.checked);
     });
     
@@ -495,6 +517,15 @@ async function refreshDirectories() {
     });
     recursiveCell.appendChild(recursiveCheckbox);
     
+    const activeCell = document.createElement('td');
+    const activeCheckbox = document.createElement('input');
+    activeCheckbox.type = 'checkbox';
+    activeCheckbox.checked = dir.active !== false; // Default to true
+    activeCheckbox.addEventListener('change', async () => {
+      await window.updateDirectoryActive(dir.path, activeCheckbox.checked);
+    });
+    activeCell.appendChild(activeCheckbox);
+    
     const watchCell = document.createElement('td');
     const watchCheckbox = document.createElement('input');
     watchCheckbox.type = 'checkbox';
@@ -516,6 +547,7 @@ async function refreshDirectories() {
     // Append all cells to row
     row.appendChild(pathCell);
     row.appendChild(recursiveCell);
+    row.appendChild(activeCell);
     row.appendChild(watchCell);
     row.appendChild(actionsCell);
     
@@ -1400,6 +1432,18 @@ window.updateDirectoryRecursive = async function(dirPath, recursive) {
   await window.electronAPI.updateDirectoryWatch(dirPath, dir?.watch || false, recursive);
 };
 
+window.updateFileActive = async function(filePath, active) {
+  await window.electronAPI.updateFileActive(filePath, active);
+  await refreshFiles();
+  await refreshVectorStore();
+};
+
+window.updateDirectoryActive = async function(dirPath, active) {
+  await window.electronAPI.updateDirectoryActive(dirPath, active);
+  await refreshDirectories();
+  await refreshVectorStore();
+};
+
 function setupDragAndDrop() {
   const filesCanvas = document.getElementById('files-canvas');
   const directoriesCanvas = document.getElementById('directories-canvas');
@@ -1530,23 +1574,53 @@ async function saveSettings() {
   await window.electronAPI.saveSettings(settings);
 }
 
-async function saveAutoStartSetting(enabled) {
+async function loadServerSettings() {
   const settings = await window.electronAPI.getSettings();
-  settings.autoStartServer = enabled;
-  await window.electronAPI.saveSettings(settings);
+  
+  // Load server port
+  const serverPortInput = document.getElementById('settings-server-port-input');
+  if (serverPortInput) {
+    serverPortInput.value = settings.serverPort || 3000;
+  }
+  
+  // Load auto-start server
+  const autoStartServerInput = document.getElementById('settings-auto-start-server-input');
+  if (autoStartServerInput) {
+    autoStartServerInput.checked = settings.autoStartServer || false;
+  }
 }
 
-async function loadAutoStartSetting() {
+async function saveServerSettings() {
+  const serverPortInput = document.getElementById('settings-server-port-input');
+  const autoStartServerInput = document.getElementById('settings-auto-start-server-input');
+  
+  if (!serverPortInput || !autoStartServerInput) {
+    return;
+  }
+  
+  const serverPort = parseInt(serverPortInput.value) || 3000;
+  const autoStartServer = autoStartServerInput.checked || false;
+  
+  // Validate port
+  if (serverPort < 1024 || serverPort > 65535) {
+    alert('Port must be between 1024 and 65535');
+    return;
+  }
+  
   const settings = await window.electronAPI.getSettings();
-  const checkbox = document.getElementById('auto-start-server-checkbox');
-  if (checkbox) {
-    checkbox.checked = settings.autoStartServer || false;
-  }
-  // Also load saved port if available
-  const portInput = document.getElementById('server-port');
-  if (portInput && settings.serverPort) {
-    portInput.value = settings.serverPort;
-  }
+  settings.serverPort = serverPort;
+  settings.autoStartServer = autoStartServer;
+  await window.electronAPI.saveSettings(settings);
+  
+  // Show confirmation
+  const btn = document.getElementById('settings-save-server-settings-btn');
+  const originalText = btn.textContent;
+  btn.textContent = '✓ Saved!';
+  btn.style.background = '#4caf50';
+  setTimeout(() => {
+    btn.textContent = originalText;
+    btn.style.background = '';
+  }, 2000);
 }
 
 async function checkAndAutoStartServer() {
@@ -1557,11 +1631,6 @@ async function checkAndAutoStartServer() {
       const port = settings.serverPort || 3000;
       try {
         await window.electronAPI.startMCPServer(port);
-        // Update port input if it exists
-        const portInput = document.getElementById('server-port');
-        if (portInput) {
-          portInput.value = port;
-        }
         await refreshServerStatus();
       } catch (error) {
         console.error('Error auto-starting server:', error);
@@ -1591,20 +1660,221 @@ async function loadSettings() {
 
 async function loadChunkingSettings() {
   const settings = await window.electronAPI.getSettings();
-  const chunkSizeInput = document.getElementById('settings-chunk-size-input');
-  const chunkOverlapInput = document.getElementById('settings-chunk-overlap-input');
   
+  // Load chunk size (default to 1000 if old value exists, otherwise 512)
+  const chunkSizeInput = document.getElementById('settings-chunk-size-input');
   if (chunkSizeInput) {
-    chunkSizeInput.value = settings.chunkSize || 1000;
+    chunkSizeInput.value = settings.chunkSize || (settings.chunkSize === undefined ? 512 : 1000);
   }
+  
+  // Load chunk overlap (default to 200 if old value exists, otherwise 64)
+  const chunkOverlapInput = document.getElementById('settings-chunk-overlap-input');
   if (chunkOverlapInput) {
-    chunkOverlapInput.value = settings.chunkOverlap || 200;
+    chunkOverlapInput.value = settings.chunkOverlap || (settings.chunkOverlap === undefined ? 64 : 200);
   }
+  
+  // Load min chunk chars
+  const minChunkCharsInput = document.getElementById('settings-min-chunk-chars-input');
+  if (minChunkCharsInput) {
+    minChunkCharsInput.value = settings.minChunkChars || 50;
+  }
+  
+  // Load min chunk tokens
+  const minChunkTokensInput = document.getElementById('settings-min-chunk-tokens-input');
+  if (minChunkTokensInput) {
+    minChunkTokensInput.value = settings.minChunkTokens || 10;
+  }
+  
+  // Load max chunks per document
+  const maxChunksInput = document.getElementById('settings-max-chunks-input');
+  if (maxChunksInput) {
+    maxChunksInput.value = settings.maxChunksPerDocument || 0;
+  }
+  
+  // Load embedding model
+  const embeddingModelInput = document.getElementById('settings-embedding-model-input');
+  if (embeddingModelInput) {
+    embeddingModelInput.value = settings.embeddingModel || 'Xenova/all-MiniLM-L6-v2';
+  }
+  
+  // Load normalize embeddings
+  const normalizeEmbeddingsInput = document.getElementById('settings-normalize-embeddings-input');
+  if (normalizeEmbeddingsInput) {
+    normalizeEmbeddingsInput.checked = settings.normalizeEmbeddings !== false; // Default to true
+  }
+}
+
+async function loadRetrievalSettings() {
+  const settings = await window.electronAPI.getSettings();
+  
+  // Load top K
+  const topKInput = document.getElementById('settings-top-k-input');
+  if (topKInput) {
+    topKInput.value = settings.retrievalTopK || 10;
+  }
+  
+  // Load score threshold
+  const scoreThresholdInput = document.getElementById('settings-score-threshold-input');
+  if (scoreThresholdInput) {
+    scoreThresholdInput.value = settings.retrievalScoreThreshold || 0;
+  }
+  
+  // Load max chunks per document (retrieval)
+  const maxChunksPerDocInput = document.getElementById('settings-max-chunks-per-doc-input');
+  if (maxChunksPerDocInput) {
+    maxChunksPerDocInput.value = settings.retrievalMaxChunksPerDoc || 0;
+  }
+  
+  // Load group by document
+  const groupByDocInput = document.getElementById('settings-group-by-doc-input');
+  if (groupByDocInput) {
+    groupByDocInput.checked = settings.retrievalGroupByDoc || false;
+  }
+  
+  // Load return full documents
+  const returnFullDocsInput = document.getElementById('settings-return-full-docs-input');
+  if (returnFullDocsInput) {
+    returnFullDocsInput.checked = settings.retrievalReturnFullDocs || false;
+  }
+  
+  // Load max context tokens
+  const maxContextTokensInput = document.getElementById('settings-max-context-tokens-input');
+  if (maxContextTokensInput) {
+    maxContextTokensInput.value = settings.retrievalMaxContextTokens || 0;
+  }
+}
+
+async function saveRetrievalSettings() {
+  const topKInput = document.getElementById('settings-top-k-input');
+  const scoreThresholdInput = document.getElementById('settings-score-threshold-input');
+  const maxChunksPerDocInput = document.getElementById('settings-max-chunks-per-doc-input');
+  const groupByDocInput = document.getElementById('settings-group-by-doc-input');
+  const returnFullDocsInput = document.getElementById('settings-return-full-docs-input');
+  const maxContextTokensInput = document.getElementById('settings-max-context-tokens-input');
+  
+  if (!topKInput || !scoreThresholdInput) {
+    return;
+  }
+  
+  const topK = parseInt(topKInput.value) || 10;
+  const scoreThreshold = parseFloat(scoreThresholdInput.value) || 0;
+  const maxChunksPerDoc = parseInt(maxChunksPerDocInput?.value) || 0;
+  const groupByDoc = groupByDocInput?.checked || false;
+  const returnFullDocs = returnFullDocsInput?.checked || false;
+  const maxContextTokens = parseInt(maxContextTokensInput?.value) || 0;
+  
+  // Validate values
+  if (topK < 1 || topK > 100) {
+    alert('Top K must be between 1 and 100');
+    return;
+  }
+  
+  if (scoreThreshold < 0 || scoreThreshold > 1) {
+    alert('Score threshold must be between 0 and 1');
+    return;
+  }
+  
+  if (maxChunksPerDoc < 0 || maxChunksPerDoc > 100) {
+    alert('Max chunks per document must be between 0 and 100');
+    return;
+  }
+  
+  if (maxContextTokens < 0 || maxContextTokens > 100000) {
+    alert('Max context tokens must be between 0 and 100000');
+    return;
+  }
+  
+  const settings = await window.electronAPI.getSettings();
+  settings.retrievalTopK = topK;
+  settings.retrievalScoreThreshold = scoreThreshold;
+  settings.retrievalMaxChunksPerDoc = maxChunksPerDoc;
+  settings.retrievalGroupByDoc = groupByDoc;
+  settings.retrievalReturnFullDocs = returnFullDocs;
+  settings.retrievalMaxContextTokens = maxContextTokens;
+  await window.electronAPI.saveSettings(settings);
+  
+  // Show confirmation
+  const btn = document.getElementById('settings-save-retrieval-settings-btn');
+  const originalText = btn.textContent;
+  btn.textContent = '✓ Saved!';
+  btn.style.background = '#4caf50';
+  setTimeout(() => {
+    btn.textContent = originalText;
+    btn.style.background = '';
+  }, 2000);
+}
+
+async function loadMetadataFilteringSettings() {
+  const settings = await window.electronAPI.getSettings();
+  
+  // Load since days
+  const sinceDaysInput = document.getElementById('settings-since-days-input');
+  if (sinceDaysInput) {
+    sinceDaysInput.value = settings.metadataSinceDays || 0;
+  }
+  
+  // Load time decay enabled
+  const timeDecayEnabledInput = document.getElementById('settings-time-decay-enabled-input');
+  if (timeDecayEnabledInput) {
+    timeDecayEnabledInput.checked = settings.metadataTimeDecayEnabled || false;
+  }
+  
+  // Load time decay half life
+  const timeDecayHalfLifeInput = document.getElementById('settings-time-decay-half-life-input');
+  if (timeDecayHalfLifeInput) {
+    timeDecayHalfLifeInput.value = settings.metadataTimeDecayHalfLifeDays || 30;
+  }
+}
+
+async function saveMetadataFilteringSettings() {
+  const sinceDaysInput = document.getElementById('settings-since-days-input');
+  const timeDecayEnabledInput = document.getElementById('settings-time-decay-enabled-input');
+  const timeDecayHalfLifeInput = document.getElementById('settings-time-decay-half-life-input');
+  
+  if (!sinceDaysInput || !timeDecayEnabledInput || !timeDecayHalfLifeInput) {
+    return;
+  }
+  
+  const sinceDays = parseInt(sinceDaysInput.value) || 0;
+  const timeDecayEnabled = timeDecayEnabledInput.checked || false;
+  const timeDecayHalfLifeDays = parseInt(timeDecayHalfLifeInput.value) || 30;
+  
+  // Validate values
+  if (sinceDays < 0 || sinceDays > 3650) {
+    alert('Since days must be between 0 and 3650');
+    return;
+  }
+  
+  if (timeDecayHalfLifeDays < 1 || timeDecayHalfLifeDays > 3650) {
+    alert('Time decay half life days must be between 1 and 3650');
+    return;
+  }
+  
+  const settings = await window.electronAPI.getSettings();
+  settings.metadataSinceDays = sinceDays;
+  settings.metadataTimeDecayEnabled = timeDecayEnabled;
+  settings.metadataTimeDecayHalfLifeDays = timeDecayHalfLifeDays;
+  await window.electronAPI.saveSettings(settings);
+  
+  // Show confirmation
+  const btn = document.getElementById('settings-save-metadata-filtering-settings-btn');
+  const originalText = btn.textContent;
+  btn.textContent = '✓ Saved!';
+  btn.style.background = '#4caf50';
+  setTimeout(() => {
+    btn.textContent = originalText;
+    btn.style.background = '';
+  }, 2000);
 }
 
 async function saveChunkingSettings() {
   const chunkSizeInput = document.getElementById('settings-chunk-size-input');
   const chunkOverlapInput = document.getElementById('settings-chunk-overlap-input');
+  const minChunkCharsInput = document.getElementById('settings-min-chunk-chars-input');
+  const minChunkTokensInput = document.getElementById('settings-min-chunk-tokens-input');
+  const maxChunksInput = document.getElementById('settings-max-chunks-input');
+  const embeddingModelInput = document.getElementById('settings-embedding-model-input');
+  const normalizeEmbeddingsInput = document.getElementById('settings-normalize-embeddings-input');
   
   if (!chunkSizeInput || !chunkOverlapInput) {
     return;
@@ -1612,8 +1882,13 @@ async function saveChunkingSettings() {
   
   const chunkSize = parseInt(chunkSizeInput.value) || 1000;
   const chunkOverlap = parseInt(chunkOverlapInput.value) || 200;
+  const minChunkChars = parseInt(minChunkCharsInput?.value) || 0;
+  const minChunkTokens = parseInt(minChunkTokensInput?.value) || 0;
+  const maxChunks = parseInt(maxChunksInput?.value) || 0;
+  const embeddingModel = embeddingModelInput?.value || 'Xenova/all-MiniLM-L6-v2';
+  const normalizeEmbeddings = normalizeEmbeddingsInput?.checked !== false;
   
-  // Validate values
+  // Validate values (allow wider ranges for backward compatibility)
   if (chunkSize < 100 || chunkSize > 10000) {
     alert('Chunk size must be between 100 and 10000 characters');
     return;
@@ -1629,9 +1904,29 @@ async function saveChunkingSettings() {
     return;
   }
   
+  if (minChunkChars < 0 || minChunkChars > 500) {
+    alert('Min chunk chars must be between 0 and 500');
+    return;
+  }
+  
+  if (minChunkTokens < 0 || minChunkTokens > 200) {
+    alert('Min chunk tokens must be between 0 and 200');
+    return;
+  }
+  
+  if (maxChunks < 0 || maxChunks > 10000) {
+    alert('Max chunks per document must be between 0 and 10000');
+    return;
+  }
+  
   const settings = await window.electronAPI.getSettings();
   settings.chunkSize = chunkSize;
   settings.chunkOverlap = chunkOverlap;
+  settings.minChunkChars = minChunkChars;
+  settings.minChunkTokens = minChunkTokens;
+  settings.maxChunksPerDocument = maxChunks;
+  settings.embeddingModel = embeddingModel;
+  settings.normalizeEmbeddings = normalizeEmbeddings;
   await window.electronAPI.saveSettings(settings);
   
   // Show confirmation
@@ -2095,18 +2390,15 @@ async function showHelpModal() {
       return;
     }
     
-    // Check if renderMarkdown is available
-    if (!window.electronAPI || !window.electronAPI.renderMarkdown) {
-      console.error('renderMarkdown function not available');
-      alert('Markdown renderer not available');
-      return;
+    // Content is now HTML directly, no need to render
+    console.log('Loading HTML content...');
+    console.log('Content length:', content ? `${content.length} characters` : 'null');
+    console.log('Content preview:', content ? content.substring(0, 200) : 'null');
+    if (content) {
+      contentDiv.innerHTML = content;
+    } else {
+      contentDiv.textContent = 'Error: Could not load user guide';
     }
-    
-    // Convert markdown to HTML using marked library
-    console.log('Rendering markdown...');
-    const html = window.electronAPI.renderMarkdown(content);
-    console.log('Markdown rendered:', html ? `${html.length} characters` : 'null');
-    contentDiv.innerHTML = html;
     
     // Clean up previous event handlers
     if (helpModalOverlayClickHandler) {
@@ -2171,8 +2463,11 @@ async function showSettingsModal() {
     return;
   }
   
-  // Load chunking settings when opening modal
+  // Load all settings when opening modal
   await loadChunkingSettings();
+  await loadRetrievalSettings();
+  await loadMetadataFilteringSettings();
+  await loadServerSettings();
   
   // Clean up previous event handlers
   if (settingsModalOverlayClickHandler) {
