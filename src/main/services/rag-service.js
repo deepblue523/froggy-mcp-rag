@@ -1,6 +1,7 @@
 const { EventEmitter } = require('events');
 const path = require('path');
 const fs = require('fs');
+const { performance } = require('perf_hooks');
 const { v4: uuidv4 } = require('uuid');
 const chokidar = require('chokidar');
 const { VectorStore } = require('./vector-store');
@@ -14,6 +15,7 @@ class RAGService extends EventEmitter {
     this.settingsPath = path.join(dataDir, 'settings.json');
     this.vectorStore = new VectorStore(dataDir);
     this.searchService = new SearchService(this.vectorStore);
+    this.searchProfilingEnabled = process.env.SEARCH_PROFILE === '1';
     
     // Initialize embedding model (lazy load)
     this.embeddingModel = null;
@@ -79,7 +81,8 @@ class RAGService extends EventEmitter {
       retrievalMaxChunksPerDoc: 0,
       retrievalGroupByDoc: false,
       retrievalReturnFullDocs: false,
-      retrievalMaxContextTokens: 0
+      retrievalMaxContextTokens: 0,
+      searchProfiling: false
     };
   }
 
@@ -681,6 +684,9 @@ class RAGService extends EventEmitter {
   }
 
   async search(query, limit = 10, algorithm = 'hybrid') {
+    const profiler = this.createSearchProfiler(`Search:${algorithm}`);
+    profiler?.mark('start');
+    
     // Get retrieval settings from settings
     const topK = this.settings.retrievalTopK || limit || 10;
     const scoreThreshold = this.settings.retrievalScoreThreshold || 0;
@@ -714,19 +720,38 @@ class RAGService extends EventEmitter {
           console.error('Error generating query embedding:', error);
           queryEmbedding = this.documentProcessor.simpleEmbedding(query);
         }
+        profiler?.mark('query-embedding');
       } else {
         queryEmbedding = this.documentProcessor.simpleEmbedding(query);
+        profiler?.mark('query-embedding-fallback');
       }
     }
 
-    // Get all chunks for search
-    const allChunks = this.vectorStore.getAllChunks();
+    // Check chunk count to decide if we should use streaming
+    const chunkCount = this.vectorStore.getChunksCount();
+    profiler?.mark(`chunk-count:${chunkCount}`);
+    const useStreaming = chunkCount > 5000; // Use streaming for large datasets
     
     // Get document info for time range filtering
     const documents = this.vectorStore.getDocuments();
     const docMap = new Map(documents.map(doc => [doc.id, doc]));
+    profiler?.mark('documents-loaded');
+    
+    let allChunks = null;
+    if (!useStreaming) {
+      // For smaller datasets, load chunks into memory
+      // Only load embeddings if needed for vector/hybrid search
+      if (algorithm === 'vector' || algorithm === 'hybrid') {
+        // Need embeddings for vector search
+        allChunks = this.vectorStore.getAllChunks(true);
+      } else {
+        // Text-based search (BM25, TF-IDF) doesn't need embeddings
+        allChunks = this.vectorStore.getAllChunksWithoutEmbeddings();
+      }
+    }
     
     // Use search service to perform search with retrieval and metadata settings
+    // Pass vectorStore for streaming when dataset is large
     const results = await this.searchService.search(
       query, 
       queryEmbedding, 
@@ -745,12 +770,14 @@ class RAGService extends EventEmitter {
         timeDecayEnabled,
         timeDecayHalfLifeDays
       },
-      docMap
+      docMap,
+      useStreaming ? this.vectorStore : null
     );
+    profiler?.mark('search-service');
     
     // Handle grouped results
     if (groupByDoc && results.length > 0 && results[0].chunks) {
-      return results.map(result => {
+      const finalResults = results.map(result => {
         const doc = docMap.get(result.document_id);
         if (returnFullDocs && doc) {
           // Return full document with all chunks
@@ -792,10 +819,12 @@ class RAGService extends EventEmitter {
           };
         }
       });
+      profiler?.end('completed');
+      return finalResults;
     }
     
     // Handle regular chunk results
-    return results.map(result => {
+    const finalResults = results.map(result => {
       const doc = docMap.get(result.document_id);
       if (returnFullDocs && doc) {
         // Return full document content
@@ -832,6 +861,9 @@ class RAGService extends EventEmitter {
         };
       }
     });
+    
+    profiler?.end('completed');
+    return finalResults;
   }
 
   syncWatchedFilesWithVectorStore() {
@@ -992,6 +1024,30 @@ class RAGService extends EventEmitter {
     });
     
     return { queued: queuedCount };
+  }
+
+  isSearchProfilingEnabled() {
+    return this.searchProfilingEnabled || this.settings.searchProfiling === true;
+  }
+
+  createSearchProfiler(label) {
+    if (!this.isSearchProfilingEnabled()) {
+      return null;
+    }
+    const start = performance.now();
+    let last = start;
+    console.log(`[SearchProfiler] ${label} - start`);
+    return {
+      mark: (step) => {
+        const now = performance.now();
+        console.log(`[SearchProfiler] ${label} - ${step}: ${(now - last).toFixed(2)}ms (total ${(now - start).toFixed(2)}ms)`);
+        last = now;
+      },
+      end: (finalStep = 'done') => {
+        const now = performance.now();
+        console.log(`[SearchProfiler] ${label} - ${finalStep}: ${(now - start).toFixed(2)}ms total`);
+      }
+    };
   }
 }
 

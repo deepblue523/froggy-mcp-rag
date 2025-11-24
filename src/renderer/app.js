@@ -7,6 +7,9 @@ let mruSearches = [];
 let selectedDocumentId = null;
 let selectedChunkId = null;
 let expandedDirectories = new Set(); // Track which directories are expanded
+let searchCancelled = false; // Track if search was cancelled
+let searchTimerInterval = null; // Timer interval for updating search time
+let searchStartTime = null; // Start time of current search
 
 // Initialize app
 document.addEventListener('DOMContentLoaded', async () => {
@@ -929,9 +932,105 @@ window.closeChunkDetail = function() {
   }
 };
 
+function updateSearchTimer() {
+  if (!searchStartTime) return;
+  
+  const timerElement = document.getElementById('search-timer');
+  if (!timerElement) return;
+  
+  const elapsedMs = performance.now() - searchStartTime;
+  const elapsedSeconds = (elapsedMs / 1000).toFixed(1);
+  timerElement.textContent = `${elapsedSeconds}s`;
+}
+
+function startSearchTimer() {
+  searchStartTime = performance.now();
+  updateSearchTimer();
+  
+  // Update timer every 100ms for smooth display
+  if (searchTimerInterval) {
+    clearInterval(searchTimerInterval);
+  }
+  searchTimerInterval = setInterval(updateSearchTimer, 100);
+}
+
+function stopSearchTimer() {
+  if (searchTimerInterval) {
+    clearInterval(searchTimerInterval);
+    searchTimerInterval = null;
+  }
+  searchStartTime = null;
+  
+  const timerElement = document.getElementById('search-timer');
+  if (timerElement) {
+    timerElement.textContent = '0.0s';
+  }
+}
+
+function cancelSearch() {
+  searchCancelled = true;
+  stopSearchTimer();
+  
+  // Hide loading spinner
+  const loadingSpinner = document.getElementById('search-loading-spinner');
+  if (loadingSpinner) {
+    loadingSpinner.classList.remove('active');
+  }
+  
+  // Re-enable search button and input
+  const searchBtn = document.getElementById('search-btn');
+  const searchInput = document.getElementById('search-input');
+  if (searchBtn) searchBtn.disabled = false;
+  if (searchInput) searchInput.disabled = false;
+  
+  // Clear search time display
+  const timeDisplay = document.getElementById('search-time-display');
+  if (timeDisplay) {
+    timeDisplay.textContent = '';
+  }
+}
+
 async function performSearch() {
   const query = document.getElementById('search-input').value.trim();
   if (!query) return;
+  
+  // Reset cancellation flag
+  searchCancelled = false;
+  
+  // Get UI elements
+  const searchBtn = document.getElementById('search-btn');
+  const searchInput = document.getElementById('search-input');
+  const loadingSpinner = document.getElementById('search-loading-spinner');
+  const container = document.getElementById('search-results-container');
+  const timeDisplay = document.getElementById('search-time-display');
+  const cancelBtn = document.getElementById('search-cancel-btn');
+  
+  // Disable search button and input during search
+  if (searchBtn) searchBtn.disabled = true;
+  if (searchInput) searchInput.disabled = true;
+  
+  // Show loading spinner
+  if (loadingSpinner) {
+    loadingSpinner.classList.add('active');
+  }
+  
+  // Setup cancel button handler
+  if (cancelBtn) {
+    cancelBtn.onclick = cancelSearch;
+  }
+  
+  // Hide previous results container while searching
+  if (container) {
+    container.style.display = 'none';
+  }
+  
+  // Clear previous search time
+  if (timeDisplay) {
+    timeDisplay.textContent = '';
+  }
+  
+  // Start timer
+  startSearchTimer();
   
   // Get selected algorithm
   const algorithmSelect = document.getElementById('search-algorithm');
@@ -952,51 +1051,107 @@ async function performSearch() {
   // Hide dropdown after search
   hideMRUDropdown();
   
-  // Perform search
-  const results = await window.electronAPI.search(query, 10, algorithm);
-  const container = document.getElementById('search-results-container');
-  const resultsDiv = document.getElementById('search-results');
-  const tbody = document.getElementById('search-results-tbody');
-  
-  tbody.innerHTML = '';
-  
-  if (results.length === 0) {
-    tbody.innerHTML = '<tr><td colspan="4" style="text-align: center;">No results found</td></tr>';
-  } else {
-    results.forEach((result, index) => {
-      const row = document.createElement('tr');
-      row.style.cursor = 'pointer';
-      row.addEventListener('click', () => showSearchChunkDetail(result.chunkId, result));
-      const preview = result.content.substring(0, 100) + (result.content.length > 100 ? '...' : '');
+  try {
+    // Perform search asynchronously - this won't block the UI
+    // Use setTimeout to ensure UI updates (spinner shows) before search starts
+    await new Promise(resolve => setTimeout(resolve, 0));
+    
+    // Check if cancelled before starting search
+    if (searchCancelled) {
+      return;
+    }
+    
+    const results = await window.electronAPI.search(query, 10, algorithm);
+    
+    // Check if cancelled after search completes
+    if (searchCancelled) {
+      return;
+    }
+    
+    // Get final time before stopping timer
+    const endTime = performance.now();
+    const elapsedMs = searchStartTime ? (endTime - searchStartTime) : 0;
+    const elapsedSeconds = (elapsedMs / 1000).toFixed(3);
+    
+    // Stop timer
+    stopSearchTimer();
+    
+    // Display search time
+    if (timeDisplay) {
+      timeDisplay.textContent = `Search completed in ${elapsedSeconds}s`;
+    }
+    
+    const resultsDiv = document.getElementById('search-results');
+    const tbody = document.getElementById('search-results-tbody');
+    
+    if (tbody) {
+      tbody.innerHTML = '';
       
-      // Format score based on algorithm
-      let scoreDisplay = '';
-      if (result.score !== undefined && result.score !== null) {
-        if (result.algorithm === 'Vector' || result.algorithm === 'Hybrid') {
-          // For vector/hybrid, show as percentage
-          scoreDisplay = `${(result.score * 100).toFixed(4)}%`;
-        } else {
-          // For BM25/TF-IDF, show raw score with 4 decimal places
-          scoreDisplay = result.score.toFixed(4);
-        }
+      if (results.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="4" style="text-align: center;">No results found</td></tr>';
       } else {
-        scoreDisplay = 'N/A';
+        results.forEach((result, index) => {
+          const row = document.createElement('tr');
+          row.style.cursor = 'pointer';
+          row.addEventListener('click', () => showSearchChunkDetail(result.chunkId, result));
+          const preview = result.content.substring(0, 100) + (result.content.length > 100 ? '...' : '');
+          
+          // Format score based on algorithm
+          let scoreDisplay = '';
+          if (result.score !== undefined && result.score !== null) {
+            if (result.algorithm === 'Vector' || result.algorithm === 'Hybrid') {
+              // For vector/hybrid, show as percentage
+              scoreDisplay = `${(result.score * 100).toFixed(4)}%`;
+            } else {
+              // For BM25/TF-IDF, show raw score with 4 decimal places
+              scoreDisplay = result.score.toFixed(4);
+            }
+          } else {
+            scoreDisplay = 'N/A';
+          }
+          
+          row.innerHTML = `
+            <td><span class="similarity-score">${scoreDisplay}</span></td>
+            <td><span class="algorithm-badge">${result.algorithm || 'Hybrid'}</span></td>
+            <td>${result.metadata?.fileName || 'Unknown'}</td>
+            <td>${preview}</td>
+          `;
+          tbody.appendChild(row);
+        });
       }
-      
-      row.innerHTML = `
-        <td><span class="similarity-score">${scoreDisplay}</span></td>
-        <td><span class="algorithm-badge">${result.algorithm || 'Hybrid'}</span></td>
-        <td>${result.metadata?.fileName || 'Unknown'}</td>
-        <td>${preview}</td>
-      `;
-      tbody.appendChild(row);
-    });
+    }
+    
+    // Show results container
+    if (container) {
+      container.style.display = 'flex';
+      container.style.flexDirection = 'column';
+      container.style.height = 'calc(100vh - 200px)'; // Adjust based on header and padding
+      applySearchSplitterPosition();
+    }
+  } catch (error) {
+    // Only show error if not cancelled
+    if (!searchCancelled) {
+      console.error('Search error:', error);
+      alert(`Search failed: ${error.message}`);
+    }
+  } finally {
+    // Stop timer
+    stopSearchTimer();
+    
+    // Hide loading spinner
+    if (loadingSpinner) {
+      loadingSpinner.classList.remove('active');
+    }
+    
+    // Re-enable search button and input
+    if (searchBtn) searchBtn.disabled = false;
+    if (searchInput) searchInput.disabled = false;
+    
+    // Remove cancel button handler
+    if (cancelBtn) {
+      cancelBtn.onclick = null;
+    }
   }
-  
-  container.style.display = 'flex';
-  container.style.flexDirection = 'column';
-  container.style.height = 'calc(100vh - 200px)'; // Adjust based on header and padding
-  applySearchSplitterPosition();
 }
 
 async function showSearchChunkDetail(chunkId, result) {

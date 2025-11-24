@@ -170,16 +170,32 @@ module.exports = function setupIpcHandlers(ipcMain, ragService, mcpService) {
 
   // Setup event forwarding
   ragService.on('ingestion-update', (data) => {
-    const window = require('electron').BrowserWindow.getAllWindows()[0];
-    if (window) {
-      window.webContents.send('ingestion-update', data);
+    try {
+      const window = require('electron').BrowserWindow.getAllWindows()[0];
+      if (window && !window.isDestroyed() && window.webContents && !window.webContents.isDestroyed()) {
+        window.webContents.send('ingestion-update', data);
+      }
+    } catch (error) {
+      // Silently ignore errors when renderer frame is disposed
+      // This can happen during long processing sequences if the window is closed
+      if (!error.message.includes('Render frame was disposed')) {
+        console.error('Error sending ingestion-update:', error);
+      }
     }
   });
 
   mcpService.on('log', (data) => {
-    const window = require('electron').BrowserWindow.getAllWindows()[0];
-    if (window) {
-      window.webContents.send('mcp-server-log', data);
+    try {
+      const window = require('electron').BrowserWindow.getAllWindows()[0];
+      if (window && !window.isDestroyed() && window.webContents && !window.webContents.isDestroyed()) {
+        window.webContents.send('mcp-server-log', data);
+      }
+    } catch (error) {
+      // Silently ignore errors when renderer frame is disposed
+      // This can happen during long processing sequences if the window is closed
+      if (!error.message.includes('Render frame was disposed')) {
+        console.error('Error sending mcp-server-log:', error);
+      }
     }
   });
 };

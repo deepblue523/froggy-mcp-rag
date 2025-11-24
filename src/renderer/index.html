@@ -170,7 +170,7 @@
         </div>
 
         <!-- Search Canvas -->
-        <div class="canvas" id="search-canvas" style="display: none;">
+        <div class="canvas" id="search-canvas" style="display: none; position: relative;">
           <h2>Search</h2>
           <div class="search-container">
             <div class="search-box" style="position: relative;">
@@ -182,9 +182,18 @@
               <div id="mru-list"></div>
             </div>
           </div>
+          <div class="search-loading-spinner" id="search-loading-spinner">
+            <div class="spinner"></div>
+            <div class="search-loading-text">Searching...</div>
+            <div class="search-timer" id="search-timer">0.0s</div>
+            <button class="btn btn-secondary search-cancel-btn" id="search-cancel-btn">Cancel</button>
+          </div>
           <div class="search-results-container" id="search-results-container" style="display: none;">
             <div class="search-results" id="search-results">
-              <h3>Results</h3>
+              <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+                <h3 style="margin: 0;">Results</h3>
+                <div id="search-time-display" style="font-size: 13px; color: #757575; font-style: italic;"></div>
+              </div>
               <div class="search-options" style="margin-bottom: 10px;">
                 <label for="search-algorithm">Algorithm: </label>
                 <select id="search-algorithm" style="padding: 5px; margin-left: 5px;">
