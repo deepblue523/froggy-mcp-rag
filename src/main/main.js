@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, screen } = require('electron');
+const { app, BrowserWindow, ipcMain, screen, Tray, Menu, nativeImage } = require('electron');
 const path = require('path');
 const os = require('os');
 const fs = require('fs');
@@ -10,12 +10,17 @@ if (!fs.existsSync(dataDir)) {
 }
 
 let mainWindow;
+let tray = null;
 let mcpServer = null;
 let ragService = null;
 let mcpService = null;
+app.isQuitting = false;
 
 // Window state persistence
 const windowStateFile = path.join(dataDir, 'window-state.json');
+
+// Settings file path (will be initialized after services)
+let settingsPath = null;
 
 function getWindowState() {
   try {
@@ -83,12 +88,13 @@ async function initializeServices() {
     try {
       const { RAGService } = require('./services/rag-service');
       const { MCPService } = require('./services/mcp-service');
+      const setupIpcHandlers = require('./ipc-handlers');
       
       ragService = new RAGService(dataDir);
       mcpService = new MCPService(ragService);
       
-      // Expose services to renderer via IPC
-      require('./ipc-handlers')(ipcMain, ragService, mcpService);
+      // Expose services to renderer via IPC (replaces handlers set up earlier)
+      setupIpcHandlers(ipcMain, ragService, mcpService);
     } catch (error) {
       console.error('Error initializing services:', error);
       // If better-sqlite3 fails, we'll handle it gracefully
@@ -98,6 +104,88 @@ async function initializeServices() {
       throw error;
     }
   }
+}
+
+function getMinimizeToTraySetting() {
+  try {
+    // Try to get settings path from ragService first, then fallback to constructed path
+    let pathToUse = settingsPath;
+    if (!pathToUse && ragService && ragService.settingsPath) {
+      pathToUse = ragService.settingsPath;
+    }
+    if (!pathToUse) {
+      // Fallback: construct path directly
+      pathToUse = path.join(dataDir, 'settings.json');
+    }
+    
+    if (pathToUse && fs.existsSync(pathToUse)) {
+      const settings = JSON.parse(fs.readFileSync(pathToUse, 'utf8'));
+      return settings.minimizeToTray === true;
+    }
+  } catch (error) {
+    console.error('Error reading minimizeToTray setting:', error);
+  }
+  return false; // Default to false
+}
+
+function createTray() {
+  // Try to find an icon file, or use a default empty icon
+  let trayIcon;
+  const possibleIconPaths = [
+    path.join(__dirname, '..', '..', 'assets', 'icon.png'),
+    path.join(__dirname, '..', '..', 'build', 'icon.png'),
+    path.join(__dirname, '..', '..', 'icon.png')
+  ];
+  
+  for (const iconPath of possibleIconPaths) {
+    if (fs.existsSync(iconPath)) {
+      trayIcon = nativeImage.createFromPath(iconPath);
+      break;
+    }
+  }
+  
+  // If no icon found, create a simple empty icon (Electron will use app icon as fallback)
+  if (!trayIcon || trayIcon.isEmpty()) {
+    // Create a minimal 16x16 image
+    trayIcon = nativeImage.createEmpty();
+  }
+  
+  // Resize for system tray (typically 16x16 or 22x22 depending on OS)
+  if (!trayIcon.isEmpty()) {
+    trayIcon = trayIcon.resize({ width: 16, height: 16 });
+  }
+  
+  tray = new Tray(trayIcon);
+  
+  const contextMenu = Menu.buildFromTemplate([
+    {
+      label: 'Show',
+      click: () => {
+        if (mainWindow) {
+          mainWindow.show();
+          mainWindow.focus();
+        }
+      }
+    },
+    {
+      label: 'Quit',
+      click: () => {
+        app.isQuitting = true;
+        app.quit();
+      }
+    }
+  ]);
+  
+  tray.setToolTip('Froggy RAG MCP');
+  tray.setContextMenu(contextMenu);
+  
+  // Double-click to show window
+  tray.on('double-click', () => {
+    if (mainWindow) {
+      mainWindow.show();
+      mainWindow.focus();
+    }
+  });
 }
 
 function createWindow() {
@@ -136,9 +224,40 @@ function createWindow() {
   mainWindow.on('moved', debouncedSave);
   mainWindow.on('resized', debouncedSave);
 
-  // Save state when window is closed
-  mainWindow.on('close', () => {
-    saveWindowState();
+  // Handle window close event
+  mainWindow.on('close', (event) => {
+    const minimizeToTray = getMinimizeToTraySetting();
+    if (minimizeToTray && !app.isQuitting) {
+      event.preventDefault();
+      mainWindow.hide();
+      // Show notification on Windows (balloon is Windows-specific)
+      if (tray && process.platform === 'win32' && typeof tray.displayBalloon === 'function') {
+        tray.displayBalloon({
+          title: 'Froggy RAG MCP',
+          content: 'Application minimized to system tray. Click the tray icon to restore.',
+          icon: null
+        });
+      }
+    } else {
+      saveWindowState();
+    }
+  });
+
+  // Handle minimize event
+  mainWindow.on('minimize', (event) => {
+    const minimizeToTray = getMinimizeToTraySetting();
+    if (minimizeToTray) {
+      event.preventDefault();
+      mainWindow.hide();
+      // Show notification on Windows (balloon is Windows-specific)
+      if (tray && process.platform === 'win32' && typeof tray.displayBalloon === 'function') {
+        tray.displayBalloon({
+          title: 'Froggy RAG MCP',
+          content: 'Application minimized to system tray. Click the tray icon to restore.',
+          icon: null
+        });
+      }
+    }
   });
 
   // Open DevTools in development
@@ -148,24 +267,46 @@ function createWindow() {
 }
 
 app.whenReady().then(async () => {
-  // Initialize services before creating window
-  try {
-    await initializeServices();
-  } catch (error) {
-    console.error('Failed to initialize services:', error);
-  }
+  // Create system tray
+  createTray();
   
+  // Create window immediately - don't wait for services
   createWindow();
+  
+  // Set up IPC handlers immediately (they'll wait for services to be ready)
+  const setupIpcHandlers = require('./ipc-handlers');
+  setupIpcHandlers(ipcMain, null, null);
+  
+  // Initialize services in background (non-blocking)
+  // This allows the window to show immediately while services initialize
+  initializeServices().then(() => {
+    // Get settings path from RAG service after initialization
+    if (ragService && ragService.settingsPath) {
+      settingsPath = ragService.settingsPath;
+    }
+  }).catch(error => {
+    console.error('Failed to initialize services:', error);
+  });
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
       createWindow();
+    } else if (mainWindow) {
+      mainWindow.show();
+      mainWindow.focus();
     }
+  });
+  
+  // Handle app quit
+  app.on('before-quit', () => {
+    app.isQuitting = true;
   });
 });
 
 app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') {
+  // Don't quit if minimize to tray is enabled
+  const minimizeToTray = getMinimizeToTraySetting();
+  if (!minimizeToTray && process.platform !== 'darwin') {
     app.quit();
   }
 });

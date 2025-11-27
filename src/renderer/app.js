@@ -12,18 +12,32 @@ let searchTimerInterval = null; // Timer interval for updating search time
 let searchStartTime = null; // Start time of current search
 
 // Initialize app
-document.addEventListener('DOMContentLoaded', async () => {
-  await initializeApp();
+document.addEventListener('DOMContentLoaded', () => {
+  // Set up UI immediately (non-blocking)
   setupEventListeners();
-  loadSettings();
+  setupSplitter();
+  setupSearchSplitter();
+  setupChunkDetailSplitter();
+  setupTreeNavigation();
+  
+  // Show default canvas immediately
+  showCanvas('files');
+  
+  // Load settings and initialize in background (non-blocking)
+  initializeApp().catch(err => console.error('Error initializing app:', err));
 });
 
 async function initializeApp() {
-  // Load settings
+  // Load settings in background
   const settings = await window.electronAPI.getSettings();
+  
+  // Apply settings when ready
   if (settings.splitterPosition) {
     splitterPosition = settings.splitterPosition;
-    document.getElementById('treePanel').style.width = `${splitterPosition}px`;
+    const treePanel = document.getElementById('treePanel');
+    if (treePanel) {
+      treePanel.style.width = `${splitterPosition}px`;
+    }
   }
   if (settings.searchSplitterPosition) {
     searchSplitterPosition = settings.searchSplitterPosition;
@@ -38,22 +52,29 @@ async function initializeApp() {
     updateMRUList();
   }
 
-  // Setup splitters
-  setupSplitter();
-  setupSearchSplitter();
-  setupChunkDetailSplitter();
-
-  // Setup tree navigation
-  setupTreeNavigation();
-
-  // Load initial data
-  await refreshFiles();
-  await refreshDirectories();
-  await refreshVectorStore();
-  await refreshServerStatus();
+  // Load initial data in background (non-blocking)
+  // Stagger the refresh calls slightly to avoid overwhelming IPC system
+  // This prevents network service crashes from too many simultaneous IPC calls
+  setTimeout(() => {
+    refreshFiles().catch(err => console.error('Error refreshing files:', err));
+  }, 100);
   
-  // Auto-start server if enabled
-  await checkAndAutoStartServer();
+  setTimeout(() => {
+    refreshDirectories().catch(err => console.error('Error refreshing directories:', err));
+  }, 200);
+  
+  setTimeout(() => {
+    refreshVectorStore().catch(err => console.error('Error refreshing vector store:', err));
+  }, 300);
+  
+  setTimeout(() => {
+    refreshServerStatus().catch(err => console.error('Error refreshing server status:', err));
+  }, 400);
+  
+  // Auto-start server if enabled (also non-blocking, with delay)
+  setTimeout(() => {
+    checkAndAutoStartServer().catch(err => console.error('Error auto-starting server:', err));
+  }, 500);
 
   // Setup event listeners for updates
   window.electronAPI.onIngestionUpdate(async (data) => {
@@ -173,6 +194,14 @@ function setupEventListeners() {
   if (saveMetadataFilteringSettingsBtn) {
     saveMetadataFilteringSettingsBtn.addEventListener('click', async () => {
       await saveMetadataFilteringSettings();
+    });
+  }
+
+  // General settings (in settings modal)
+  const saveGeneralSettingsBtn = document.getElementById('settings-save-general-settings-btn');
+  if (saveGeneralSettingsBtn) {
+    saveGeneralSettingsBtn.addEventListener('click', async () => {
+      await saveGeneralSettings();
     });
   }
 
@@ -1729,6 +1758,40 @@ async function saveSettings() {
   await window.electronAPI.saveSettings(settings);
 }
 
+async function loadGeneralSettings() {
+  const settings = await window.electronAPI.getSettings();
+  
+  // Load minimize to tray
+  const minimizeToTrayInput = document.getElementById('settings-minimize-to-tray-input');
+  if (minimizeToTrayInput) {
+    minimizeToTrayInput.checked = settings.minimizeToTray || false;
+  }
+}
+
+async function saveGeneralSettings() {
+  const minimizeToTrayInput = document.getElementById('settings-minimize-to-tray-input');
+  
+  if (!minimizeToTrayInput) {
+    return;
+  }
+  
+  const minimizeToTray = minimizeToTrayInput.checked || false;
+  
+  const settings = await window.electronAPI.getSettings();
+  settings.minimizeToTray = minimizeToTray;
+  await window.electronAPI.saveSettings(settings);
+  
+  // Show confirmation
+  const btn = document.getElementById('settings-save-general-settings-btn');
+  const originalText = btn.textContent;
+  btn.textContent = '✓ Saved!';
+  btn.style.background = '#4caf50';
+  setTimeout(() => {
+    btn.textContent = originalText;
+    btn.style.background = '';
+  }, 2000);
+}
+
 async function loadServerSettings() {
   const settings = await window.electronAPI.getSettings();
   
@@ -2622,6 +2685,7 @@ async function showSettingsModal() {
   await loadChunkingSettings();
   await loadRetrievalSettings();
   await loadMetadataFilteringSettings();
+  await loadGeneralSettings();
   await loadServerSettings();
   
   // Clean up previous event handlers

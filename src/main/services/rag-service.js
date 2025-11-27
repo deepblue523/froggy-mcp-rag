@@ -43,8 +43,11 @@ class RAGService extends EventEmitter {
     // Restore watched files/directories
     this.restoreWatchers();
     
-    // Sync watched files/directories with vector store on startup
-    this.syncWatchedFilesWithVectorStore();
+    // Sync watched files/directories with vector store on startup (non-blocking)
+    // Don't await - let it run in the background so app can start quickly
+    this.syncWatchedFilesWithVectorStore().catch(err => {
+      console.error('Error syncing watched files:', err);
+    });
   }
 
   async loadEmbeddingModel() {
@@ -82,7 +85,8 @@ class RAGService extends EventEmitter {
       retrievalGroupByDoc: false,
       retrievalReturnFullDocs: false,
       retrievalMaxContextTokens: 0,
-      searchProfiling: false
+      searchProfiling: false,
+      minimizeToTray: false
     };
   }
 
@@ -866,7 +870,7 @@ class RAGService extends EventEmitter {
     return finalResults;
   }
 
-  syncWatchedFilesWithVectorStore() {
+  async syncWatchedFilesWithVectorStore() {
     console.log('Syncing watched files/directories with vector store...');
     
     const watchedFilePaths = new Set();
