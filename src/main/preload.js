@@ -4,6 +4,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Data directory
   getDataDir: () => ipcRenderer.invoke('get-data-dir'),
   
+  // App version
+  getAppVersion: () => ipcRenderer.invoke('get-app-version'),
+  
   // RAG Service
   ingestFile: (filePath, watch) => ipcRenderer.invoke('ingest-file', filePath, watch),
   ingestDirectory: (dirPath, recursive, watch) => ipcRenderer.invoke('ingest-directory', dirPath, recursive, watch),
@@ -57,6 +60,26 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
   onMCPServerLog: (callback) => {
     ipcRenderer.on('mcp-server-log', (_, data) => callback(data));
+  },
+  
+  // Auto-update
+  checkForUpdates: () => ipcRenderer.invoke('check-for-updates'),
+  downloadUpdate: () => ipcRenderer.invoke('download-update'),
+  installUpdate: () => ipcRenderer.invoke('install-update'),
+  onUpdateAvailable: (callback) => {
+    ipcRenderer.on('update-available', (_, data) => callback(data));
+  },
+  onUpdateNotAvailable: (callback) => {
+    ipcRenderer.on('update-not-available', () => callback());
+  },
+  onUpdateError: (callback) => {
+    ipcRenderer.on('update-error', (_, error) => callback(error));
+  },
+  onUpdateDownloadProgress: (callback) => {
+    ipcRenderer.on('update-download-progress', (_, progress) => callback(progress));
+  },
+  onUpdateDownloaded: (callback) => {
+    ipcRenderer.on('update-downloaded', (_, data) => callback(data));
   }
 });
 

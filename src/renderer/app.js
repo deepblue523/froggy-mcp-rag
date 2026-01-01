@@ -19,6 +19,19 @@ document.addEventListener('DOMContentLoaded', async () => {
 });
 
 async function initializeApp() {
+  // Load and display app version
+  try {
+    const version = await window.electronAPI.getAppVersion();
+    const versionElements = document.querySelectorAll('#app-version, #header-version');
+    versionElements.forEach(el => {
+      if (el) el.textContent = version;
+    });
+    // Update page title
+    document.title = `Froggy RAG MCP (v${version})`;
+  } catch (error) {
+    console.error('Error loading app version:', error);
+  }
+  
   // Load settings
   const settings = await window.electronAPI.getSettings();
   if (settings.splitterPosition) {

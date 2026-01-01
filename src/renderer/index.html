@@ -3,14 +3,17 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Froggy RAG MCP</title>
+  <title>Froggy RAG MCP (v<span id="app-version"></span>)</title>
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
   <div class="app-container">
     <!-- Header -->
     <header class="header">
-      <h1>Froggy RAG MCP</h1>
+      <div style="display: flex; align-items: center; gap: 10px;">
+        <img src="./images/Froggy RAG x32.png" alt="Froggy RAG MCP" style="width: 32px; height: 32px; flex-shrink: 0;">
+        <h1>Froggy RAG MCP <span style="font-size: 0.6em; font-weight: normal; color: #757575;">(v<span id="header-version"></span>)</span></h1>
+      </div>
       <div style="display: flex; gap: 10px; align-items: center;">
         <button class="btn-help" id="settings-btn" title="Settings">⚙️</button>
         <button class="btn-help" id="help-btn" title="Help">?</button>

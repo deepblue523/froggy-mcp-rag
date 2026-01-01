@@ -1,7 +1,12 @@
 const { app, BrowserWindow, ipcMain, screen } = require('electron');
+const { autoUpdater } = require('electron-updater');
 const path = require('path');
 const os = require('os');
 const fs = require('fs');
+
+// Get version from package.json
+const packageJson = require('../../package.json');
+const appVersion = packageJson.version;
 
 // Ensure data directory exists
 const dataDir = path.join(os.homedir(), 'froggy-rag-mcp', 'data');
@@ -118,8 +123,9 @@ function createWindow() {
       contextIsolation: true,
       preload: path.join(__dirname, 'preload.js')
     },
-    title: 'Froggy RAG MCP',
-    autoHideMenuBar: true
+    title: `Froggy RAG MCP (v${appVersion})`,
+    autoHideMenuBar: true,
+    icon: path.join(__dirname, '..', 'renderer', 'images', 'Froggy RAG x32.png')
   });
 
   mainWindow.loadFile(path.join(__dirname, '..', 'renderer', 'index.html'));
@@ -147,7 +153,116 @@ function createWindow() {
   }
 }
 
+// Auto-updater configuration
+function setupAutoUpdater() {
+  // Configure auto-updater
+  autoUpdater.autoDownload = false; // Don't auto-download, let user choose
+  autoUpdater.autoInstallOnAppQuit = true; // Install on app quit if update is downloaded
+  
+  // Only check for updates in production (not in dev mode)
+  if (!process.argv.includes('--dev') && app.isPackaged) {
+    // Check for updates on startup
+    autoUpdater.checkForUpdates();
+    
+    // Check for updates every 4 hours
+    setInterval(() => {
+      autoUpdater.checkForUpdates();
+    }, 4 * 60 * 60 * 1000);
+  }
+
+  // Update available
+  autoUpdater.on('update-available', (info) => {
+    console.log('Update available:', info.version);
+    if (mainWindow) {
+      mainWindow.webContents.send('update-available', {
+        version: info.version,
+        releaseDate: info.releaseDate,
+        releaseNotes: info.releaseNotes
+      });
+    }
+  });
+
+  // Update not available
+  autoUpdater.on('update-not-available', (info) => {
+    console.log('Update not available. Current version is latest.');
+    if (mainWindow) {
+      mainWindow.webContents.send('update-not-available');
+    }
+  });
+
+  // Error checking for updates
+  autoUpdater.on('error', (err) => {
+    console.error('Error checking for updates:', err);
+    if (mainWindow) {
+      mainWindow.webContents.send('update-error', err.message);
+    }
+  });
+
+  // Download progress
+  autoUpdater.on('download-progress', (progressObj) => {
+    if (mainWindow) {
+      mainWindow.webContents.send('update-download-progress', {
+        percent: progressObj.percent,
+        transferred: progressObj.transferred,
+        total: progressObj.total
+      });
+    }
+  });
+
+  // Update downloaded
+  autoUpdater.on('update-downloaded', (info) => {
+    console.log('Update downloaded:', info.version);
+    if (mainWindow) {
+      mainWindow.webContents.send('update-downloaded', {
+        version: info.version,
+        releaseDate: info.releaseDate,
+        releaseNotes: info.releaseNotes
+      });
+    }
+  });
+}
+
+// IPC handlers for update actions
+ipcMain.handle('check-for-updates', async () => {
+  if (app.isPackaged && !process.argv.includes('--dev')) {
+    try {
+      const result = await autoUpdater.checkForUpdates();
+      return { success: true, result };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  }
+  return { success: false, error: 'Updates only available in production builds' };
+});
+
+ipcMain.handle('download-update', async () => {
+  if (app.isPackaged && !process.argv.includes('--dev')) {
+    try {
+      await autoUpdater.downloadUpdate();
+      return { success: true };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  }
+  return { success: false, error: 'Updates only available in production builds' };
+});
+
+ipcMain.handle('install-update', async () => {
+  if (app.isPackaged && !process.argv.includes('--dev')) {
+    try {
+      autoUpdater.quitAndInstall(false, true);
+      return { success: true };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  }
+  return { success: false, error: 'Updates only available in production builds' };
+});
+
 app.whenReady().then(async () => {
+  // Setup auto-updater
+  setupAutoUpdater();
+  
   // Initialize services before creating window
   try {
     await initializeServices();
@@ -172,6 +287,7 @@ app.on('window-all-closed', () => {
 
 // IPC handlers
 ipcMain.handle('get-data-dir', () => dataDir);
+ipcMain.handle('get-app-version', () => appVersion);
 
 // Fallback for app-ready event (services should already be initialized)
 ipcMain.on('app-ready', async () => {
