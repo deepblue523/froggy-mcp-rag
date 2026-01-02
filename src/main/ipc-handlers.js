@@ -2,110 +2,183 @@ const { ipcMain } = require('electron');
 const fs = require('fs');
 const path = require('path');
 
+// Helper to wait for services to be ready
+let ragServiceRef = null;
+let mcpServiceRef = null;
+let servicesReady = false;
+let servicesReadyPromise = null;
+let servicesReadyResolve = null;
+let handlersRegistered = false;
+
+function waitForServices() {
+  if (servicesReady && ragServiceRef && mcpServiceRef) {
+    return Promise.resolve();
+  }
+  if (!servicesReadyPromise) {
+    servicesReadyPromise = new Promise((resolve) => {
+      servicesReadyResolve = resolve;
+    });
+  }
+  return servicesReadyPromise;
+}
+
 module.exports = function setupIpcHandlers(ipcMain, ragService, mcpService) {
+  // Update service references if provided
+  if (ragService && mcpService) {
+    ragServiceRef = ragService;
+    mcpServiceRef = mcpService;
+    servicesReady = true;
+    // Resolve any waiting promises
+    if (servicesReadyResolve) {
+      servicesReadyResolve();
+      servicesReadyResolve = null;
+      servicesReadyPromise = null;
+    }
+  } else {
+    // Services not ready yet - handlers will wait
+    servicesReady = false;
+  }
+  
+  // Only register handlers once - if already registered, just set up event listeners
+  if (handlersRegistered) {
+    // Set up event listeners if services are now available
+    if (ragService && mcpService) {
+      setupEventListeners(ragService, mcpService);
+    }
+    return;
+  }
+  
+  // Mark handlers as registered
+  handlersRegistered = true;
+  
   // RAG Service handlers
   ipcMain.handle('ingest-file', async (_, filePath, watch) => {
-    return await ragService.ingestFile(filePath, watch);
+    await waitForServices();
+    return await ragServiceRef.ingestFile(filePath, watch);
   });
 
   ipcMain.handle('ingest-directory', async (_, dirPath, recursive, watch) => {
-    return await ragService.ingestDirectory(dirPath, recursive, watch);
+    await waitForServices();
+    return await ragServiceRef.ingestDirectory(dirPath, recursive, watch);
   });
 
-  ipcMain.handle('get-ingestion-status', () => {
-    return ragService.getIngestionStatus();
+  ipcMain.handle('get-ingestion-status', async () => {
+    await waitForServices();
+    return ragServiceRef.getIngestionStatus();
   });
 
-  ipcMain.handle('get-files', () => {
-    return ragService.getFiles();
+  ipcMain.handle('get-files', async () => {
+    await waitForServices();
+    return ragServiceRef.getFiles();
   });
 
-  ipcMain.handle('get-directories', () => {
-    return ragService.getDirectories();
+  ipcMain.handle('get-directories', async () => {
+    await waitForServices();
+    return ragServiceRef.getDirectories();
   });
 
-  ipcMain.handle('get-directory-files', (_, dirPath) => {
-    return ragService.getDirectoryFiles(dirPath);
+  ipcMain.handle('get-directory-files', async (_, dirPath) => {
+    await waitForServices();
+    return ragServiceRef.getDirectoryFiles(dirPath);
   });
 
-  ipcMain.handle('remove-file', (_, filePath) => {
-    return ragService.removeFile(filePath);
+  ipcMain.handle('remove-file', async (_, filePath) => {
+    await waitForServices();
+    return ragServiceRef.removeFile(filePath);
   });
 
-  ipcMain.handle('remove-directory', (_, dirPath) => {
-    return ragService.removeDirectory(dirPath);
+  ipcMain.handle('remove-directory', async (_, dirPath) => {
+    await waitForServices();
+    return ragServiceRef.removeDirectory(dirPath);
   });
 
-  ipcMain.handle('update-file-watch', (_, filePath, watch) => {
-    return ragService.updateFileWatch(filePath, watch);
+  ipcMain.handle('update-file-watch', async (_, filePath, watch) => {
+    await waitForServices();
+    return ragServiceRef.updateFileWatch(filePath, watch);
   });
 
-  ipcMain.handle('update-directory-watch', (_, dirPath, watch, recursive) => {
-    return ragService.updateDirectoryWatch(dirPath, watch, recursive);
+  ipcMain.handle('update-directory-watch', async (_, dirPath, watch, recursive) => {
+    await waitForServices();
+    return ragServiceRef.updateDirectoryWatch(dirPath, watch, recursive);
   });
 
-  ipcMain.handle('update-file-active', (_, filePath, active) => {
-    return ragService.updateFileActive(filePath, active);
+  ipcMain.handle('update-file-active', async (_, filePath, active) => {
+    await waitForServices();
+    return ragServiceRef.updateFileActive(filePath, active);
   });
 
-  ipcMain.handle('update-directory-active', (_, dirPath, active) => {
-    return ragService.updateDirectoryActive(dirPath, active);
+  ipcMain.handle('update-directory-active', async (_, dirPath, active) => {
+    await waitForServices();
+    return ragServiceRef.updateDirectoryActive(dirPath, active);
   });
 
   // Vector Store handlers
-  ipcMain.handle('get-documents', () => {
-    return ragService.getDocuments();
+  ipcMain.handle('get-documents', async () => {
+    await waitForServices();
+    return ragServiceRef.getDocuments();
   });
 
-  ipcMain.handle('get-document', (_, documentId) => {
-    return ragService.getDocument(documentId);
+  ipcMain.handle('get-document', async (_, documentId) => {
+    await waitForServices();
+    return ragServiceRef.getDocument(documentId);
   });
 
-  ipcMain.handle('get-document-chunks', (_, documentId) => {
-    return ragService.getDocumentChunks(documentId);
+  ipcMain.handle('get-document-chunks', async (_, documentId) => {
+    await waitForServices();
+    return ragServiceRef.getDocumentChunks(documentId);
   });
 
-  ipcMain.handle('get-chunk-content', (_, chunkId) => {
-    return ragService.getChunkContent(chunkId);
+  ipcMain.handle('get-chunk-content', async (_, chunkId) => {
+    await waitForServices();
+    return ragServiceRef.getChunkContent(chunkId);
   });
 
-  ipcMain.handle('get-vector-store-stats', () => {
-    return ragService.getVectorStoreStats();
+  ipcMain.handle('get-vector-store-stats', async () => {
+    await waitForServices();
+    return ragServiceRef.getVectorStoreStats();
   });
 
   ipcMain.handle('regenerate-vector-store', async () => {
-    return await ragService.regenerateVectorStore();
+    await waitForServices();
+    return await ragServiceRef.regenerateVectorStore();
   });
 
   // Search handlers
   ipcMain.handle('search', async (_, query, limit = 10, algorithm = 'hybrid') => {
-    return await ragService.search(query, limit, algorithm);
+    await waitForServices();
+    return await ragServiceRef.search(query, limit, algorithm);
   });
 
   // MCP Server handlers
   ipcMain.handle('start-mcp-server', async (_, port = 3000) => {
-    return await mcpService.start(port);
+    await waitForServices();
+    return await mcpServiceRef.start(port);
   });
 
-  ipcMain.handle('stop-mcp-server', () => {
-    return mcpService.stop();
+  ipcMain.handle('stop-mcp-server', async () => {
+    await waitForServices();
+    return mcpServiceRef.stop();
   });
 
-  ipcMain.handle('get-mcp-server-status', () => {
-    return mcpService.getStatus();
+  ipcMain.handle('get-mcp-server-status', async () => {
+    await waitForServices();
+    return mcpServiceRef.getStatus();
   });
 
-  ipcMain.handle('get-mcp-server-logs', () => {
-    return mcpService.getLogs();
+  ipcMain.handle('get-mcp-server-logs', async () => {
+    await waitForServices();
+    return mcpServiceRef.getLogs();
   });
 
   // Settings handlers
-  ipcMain.handle('get-settings', () => {
-    return ragService.getSettings();
+  ipcMain.handle('get-settings', async () => {
+    await waitForServices();
+    return ragServiceRef.getSettings();
   });
 
-  ipcMain.handle('save-settings', (_, settings) => {
-    return ragService.saveSettings(settings);
+  ipcMain.handle('save-settings', async (_, settings) => {
+    await waitForServices();
+    return ragServiceRef.saveSettings(settings);
   });
 
   // Clipboard handlers
@@ -168,7 +241,17 @@ module.exports = function setupIpcHandlers(ipcMain, ragService, mcpService) {
     }
   });
 
-  // Setup event forwarding
+  // Setup event forwarding (only if services are provided)
+  if (ragService && mcpService) {
+    setupEventListeners(ragService, mcpService);
+  }
+};
+
+function setupEventListeners(ragService, mcpService) {
+  // Remove existing listeners to avoid duplicates
+  ragService.removeAllListeners('ingestion-update');
+  mcpService.removeAllListeners('log');
+  
   ragService.on('ingestion-update', (data) => {
     try {
       const window = require('electron').BrowserWindow.getAllWindows()[0];
@@ -198,5 +281,5 @@ module.exports = function setupIpcHandlers(ipcMain, ragService, mcpService) {
       }
     }
   });
-};
+}
 
