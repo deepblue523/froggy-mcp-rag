@@ -1,4 +1,5 @@
 const fs = require('fs');
+const fsPromises = require('fs').promises;
 const path = require('path');
 const { v4: uuidv4 } = require('uuid');
 const pdf = require('pdf-parse');
@@ -16,7 +17,7 @@ class DocumentProcessor {
 
   async processFile(filePath) {
     const ext = path.extname(filePath).toLowerCase();
-    const stats = fs.statSync(filePath);
+    const stats = await fsPromises.stat(filePath);
     
     let content = '';
     let metadata = {
@@ -30,18 +31,18 @@ class DocumentProcessor {
     try {
       switch (ext) {
         case '.txt':
-          content = fs.readFileSync(filePath, 'utf-8');
+          content = await fsPromises.readFile(filePath, 'utf-8');
           break;
         
         case '.pdf':
-          const pdfData = fs.readFileSync(filePath);
+          const pdfData = await fsPromises.readFile(filePath);
           const pdfResult = await pdf(pdfData);
           content = pdfResult.text;
           metadata.pages = pdfResult.numpages;
           break;
         
         case '.docx':
-          const docxBuffer = fs.readFileSync(filePath);
+          const docxBuffer = await fsPromises.readFile(filePath);
           const docxResult = await mammoth.extractRawText({ buffer: docxBuffer });
           content = docxResult.value;
           break;
@@ -63,7 +64,7 @@ class DocumentProcessor {
           break;
         
         case '.csv':
-          const csvContent = fs.readFileSync(filePath, 'utf-8');
+          const csvContent = await fsPromises.readFile(filePath, 'utf-8');
           content = csvContent;
           break;
         
@@ -148,13 +149,24 @@ class DocumentProcessor {
       });
     }
 
-    // Generate embeddings for chunks
+    // Generate embeddings for chunks with batching to prevent blocking
     if (this.embeddingModel) {
-      for (const chunk of filteredChunks) {
-        try {
-          chunk.embedding = await this.generateEmbedding(chunk.content, this.normalizeEmbeddings);
-        } catch (error) {
-          console.error(`Error generating embedding for chunk ${chunk.id}:`, error);
+      const batchSize = 10; // Process 10 chunks at a time
+      for (let i = 0; i < filteredChunks.length; i += batchSize) {
+        const batch = filteredChunks.slice(i, i + batchSize);
+        
+        // Process batch concurrently
+        await Promise.all(batch.map(async (chunk) => {
+          try {
+            chunk.embedding = await this.generateEmbedding(chunk.content, this.normalizeEmbeddings);
+          } catch (error) {
+            console.error(`Error generating embedding for chunk ${chunk.id}:`, error);
+          }
+        }));
+        
+        // Yield to event loop between batches to prevent blocking
+        if (i + batchSize < filteredChunks.length) {
+          await new Promise(resolve => setImmediate(resolve));
         }
       }
     }

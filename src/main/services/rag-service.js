@@ -32,6 +32,8 @@ class RAGService extends EventEmitter {
     // Ingestion queue
     this.ingestionQueue = [];
     this.processing = false;
+    this.activeProcessingCount = 0;
+    this.maxConcurrentProcessing = 3; // Process up to 3 files concurrently
     
     // File watchers
     this.fileWatchers = new Map();
@@ -234,13 +236,28 @@ class RAGService extends EventEmitter {
     this.processing = true;
 
     while (true) {
+      // Wait if no items in queue
       if (this.ingestionQueue.length === 0) {
         await new Promise(resolve => setTimeout(resolve, 1000));
         continue;
       }
 
+      // Wait if already processing max concurrent items
+      if (this.activeProcessingCount >= this.maxConcurrentProcessing) {
+        await new Promise(resolve => setTimeout(resolve, 100));
+        continue;
+      }
+
+      // Start processing next item (don't await - process concurrently)
       const item = this.ingestionQueue.shift();
-      await this.processQueueItem(item);
+      this.activeProcessingCount++;
+      
+      this.processQueueItem(item).finally(() => {
+        this.activeProcessingCount--;
+      });
+      
+      // Small delay to allow event loop to process other events
+      await new Promise(resolve => setImmediate(resolve));
     }
   }
 
@@ -321,6 +338,7 @@ class RAGService extends EventEmitter {
     return {
       queueLength: this.ingestionQueue.length,
       processing: this.processing,
+      activeProcessingCount: this.activeProcessingCount,
       queue: this.ingestionQueue.map(item => ({
         id: item.id,
         filePath: item.filePath,
