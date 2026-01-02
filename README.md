@@ -38,11 +38,17 @@ A turnkey, integrated RAG (Retrieval Augmented Generation) system with MCP (Mode
 
 ## Installation
 
-### Prerequisites
+### Pre-built Releases
+
+Download the latest pre-built installer from our [releases page](https://github.com/deepblue523/froggy-mcp-rag/releases).
+
+### Manual Setup
+
+#### Prerequisites
 - Node.js (v16 or higher)
 - npm or yarn
 
-### Setup
+#### Setup
 
 1. Clone the repository:
 ```bash
