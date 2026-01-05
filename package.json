@@ -1,6 +1,6 @@
 {
   "name": "froggy-rag-mcp",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Turnkey RAG system with MCP server and UI",
   "main": "src/main/main.js",
   "bin": {
@@ -102,9 +102,9 @@
     },
     "msi": {
       "oneClick": false,
-      "menuCategory": false,
-      "createDesktopShortcut": false,
-      "createStartMenuShortcut": false,
+      "menuCategory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
       "warningsAsErrors": false
     }
   }
