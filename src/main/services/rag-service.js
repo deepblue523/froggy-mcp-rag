@@ -105,19 +105,21 @@ class RAGService extends EventEmitter {
   }
 
   saveSettings(newSettings) {
-    this.settings = { ...this.settings, ...newSettings };
+    if (newSettings) {
+      this.settings = { ...this.settings, ...newSettings };
+      
+      // Update document processor if normalizeEmbeddings changed
+      if (newSettings.normalizeEmbeddings !== undefined && this.documentProcessor) {
+        this.documentProcessor.normalizeEmbeddings = newSettings.normalizeEmbeddings;
+      }
+      
+      // Reload embedding model if model changed
+      if (newSettings.embeddingModel && newSettings.embeddingModel !== this.settings.embeddingModel) {
+        this.loadEmbeddingModel();
+      }
+    }
+    
     this._saveSettingsToDisk();
-    
-    // Update document processor if normalizeEmbeddings changed
-    if (newSettings.normalizeEmbeddings !== undefined && this.documentProcessor) {
-      this.documentProcessor.normalizeEmbeddings = newSettings.normalizeEmbeddings;
-    }
-    
-    // Reload embedding model if model changed
-    if (newSettings.embeddingModel && newSettings.embeddingModel !== this.settings.embeddingModel) {
-      this.loadEmbeddingModel();
-    }
-    
     return this.settings;
   }
 
@@ -426,7 +428,7 @@ class RAGService extends EventEmitter {
         const storedPath = path.resolve(f.path);
         return storedPath !== normalizedPath;
       });
-      this.saveSettings();
+      this._saveSettingsToDisk();
       
       // Stop watching (use stored path)
       this.unwatchFile(fileEntry.path);
@@ -456,7 +458,7 @@ class RAGService extends EventEmitter {
         const storedPath = path.resolve(d.path);
         return storedPath !== normalizedDirPath;
       });
-      this.saveSettings();
+      this._saveSettingsToDisk();
       
       // Stop watching (use stored path)
       this.unwatchDirectory(dirEntry.path);
@@ -493,16 +495,21 @@ class RAGService extends EventEmitter {
   }
 
   updateDirectoryWatch(dirPath, watch, recursive) {
-    const dir = this.settings.directories.find(d => d.path === dirPath);
+    // Normalize paths for comparison
+    const normalizedDirPath = path.resolve(dirPath);
+    const dir = this.settings.directories.find(d => {
+      const normalized = path.resolve(d.path);
+      return normalized === normalizedDirPath;
+    });
     if (dir) {
       dir.watch = watch;
       dir.recursive = recursive;
       this._saveSettingsToDisk();
       
       if (watch) {
-        this.watchDirectory(dirPath, recursive);
+        this.watchDirectory(dir.path, recursive); // Use stored path format
       } else {
-        this.unwatchDirectory(dirPath);
+        this.unwatchDirectory(dir.path); // Use stored path format
       }
     }
   }
@@ -615,39 +622,80 @@ class RAGService extends EventEmitter {
   }
 
   watchDirectory(dirPath, recursive) {
-    if (this.directoryWatchers.has(dirPath)) {
+    // Normalize the directory path for consistent comparison
+    const normalizedDirPath = path.resolve(dirPath);
+    
+    if (this.directoryWatchers.has(normalizedDirPath)) {
       return;
     }
 
-    const pattern = recursive ? `${dirPath}/**/*` : `${dirPath}/*`;
-    const watcher = chokidar.watch(pattern, {
+    // Use normalized path for watching - chokidar handles both forward and backslashes
+    // Chokidar watches recursively by default, so we'll filter in the event handler for non-recursive
+    const watchPath = normalizedDirPath;
+    const watcher = chokidar.watch(watchPath, {
       ignored: /(^|[\/\\])\../, // ignore dotfiles
-      persistent: true
+      persistent: true,
+      ignoreInitial: true, // Don't process existing files on startup (handled by sync)
+      awaitWriteFinish: {
+        stabilityThreshold: 2000, // Wait 2 seconds after file stops changing
+        pollInterval: 100 // Check every 100ms
+      }
     });
 
     watcher.on('add', (filePath) => {
-      // Only process if directory is active
-      const dirEntry = this.settings.directories.find(d => d.path === dirPath);
+      console.log(`[Watcher] File added: ${filePath}`);
+      // Find directory entry using normalized path comparison
+      const dirEntry = this.settings.directories.find(d => {
+        const normalized = path.resolve(d.path);
+        return normalized === normalizedDirPath;
+      });
       if (dirEntry?.active !== false) {
+        // For non-recursive watching, check if file is a direct child
+        const isRecursive = dirEntry?.recursive || false;
+        if (!isRecursive) {
+          const fileDir = path.dirname(path.resolve(filePath));
+          const watchDir = normalizedDirPath;
+          if (fileDir !== watchDir) {
+            // File is in a subdirectory, skip it
+            return;
+          }
+        }
         const ext = path.extname(filePath).toLowerCase();
         if (['.txt', '.pdf', '.docx', '.xlsx', '.csv'].includes(ext)) {
+          console.log(`[Watcher] Queueing new file: ${filePath}`);
           this.addToQueue(filePath, 'file');
         }
       }
     });
 
     watcher.on('change', (filePath) => {
-      // Only process if directory is active
-      const dirEntry = this.settings.directories.find(d => d.path === dirPath);
+      console.log(`[Watcher] File changed: ${filePath}`);
+      // Find directory entry using normalized path comparison
+      const dirEntry = this.settings.directories.find(d => {
+        const normalized = path.resolve(d.path);
+        return normalized === normalizedDirPath;
+      });
       if (dirEntry?.active !== false) {
+        // For non-recursive watching, check if file is a direct child
+        const isRecursive = dirEntry?.recursive || false;
+        if (!isRecursive) {
+          const fileDir = path.dirname(path.resolve(filePath));
+          const watchDir = normalizedDirPath;
+          if (fileDir !== watchDir) {
+            // File is in a subdirectory, skip it
+            return;
+          }
+        }
         const ext = path.extname(filePath).toLowerCase();
         if (['.txt', '.pdf', '.docx', '.xlsx', '.csv'].includes(ext)) {
+          console.log(`[Watcher] Queueing changed file: ${filePath}`);
           this.addToQueue(filePath, 'file');
         }
       }
     });
 
     watcher.on('unlink', (filePath) => {
+      console.log(`[Watcher] File deleted: ${filePath}`);
       // File was deleted from watched directory, remove from vector store
       const ext = path.extname(filePath).toLowerCase();
       if (['.txt', '.pdf', '.docx', '.xlsx', '.csv'].includes(ext)) {
@@ -658,18 +706,30 @@ class RAGService extends EventEmitter {
       }
     });
 
-    this.directoryWatchers.set(dirPath, watcher);
+    watcher.on('error', (error) => {
+      console.error(`[Watcher] Error watching directory ${normalizedDirPath}:`, error);
+    });
+
+    watcher.on('ready', () => {
+      console.log(`[Watcher] Ready watching directory: ${normalizedDirPath} (recursive: ${recursive})`);
+    });
+
+    this.directoryWatchers.set(normalizedDirPath, watcher);
   }
 
   unwatchDirectory(dirPath) {
-    const watcher = this.directoryWatchers.get(dirPath);
+    // Normalize path for consistent lookup
+    const normalizedDirPath = path.resolve(dirPath);
+    const watcher = this.directoryWatchers.get(normalizedDirPath);
     if (watcher) {
       watcher.close();
-      this.directoryWatchers.delete(dirPath);
+      this.directoryWatchers.delete(normalizedDirPath);
+      console.log(`[Watcher] Stopped watching directory: ${normalizedDirPath}`);
     }
   }
 
   restoreWatchers() {
+    console.log('[Watcher] Restoring watchers...');
     // Restore file watchers
     for (const file of this.settings.files || []) {
       if (file.watch && fs.existsSync(file.path)) {
@@ -680,9 +740,11 @@ class RAGService extends EventEmitter {
     // Restore directory watchers
     for (const dir of this.settings.directories || []) {
       if (dir.watch && fs.existsSync(dir.path)) {
+        console.log(`[Watcher] Restoring directory watcher: ${dir.path} (recursive: ${dir.recursive || false})`);
         this.watchDirectory(dir.path, dir.recursive);
       }
     }
+    console.log('[Watcher] Watchers restored');
   }
 
   getDocuments() {
