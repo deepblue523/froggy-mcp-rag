@@ -5,6 +5,7 @@ const { v4: uuidv4 } = require('uuid');
 const pdf = require('pdf-parse');
 const mammoth = require('mammoth');
 const ExcelJS = require('exceljs');
+const { convert: htmlToText } = require('html-to-text');
 const natural = require('natural');
 
 class DocumentProcessor {
@@ -20,12 +21,22 @@ class DocumentProcessor {
     const stats = await fsPromises.stat(filePath);
     
     let content = '';
+    // Build namespace from path segments (e.g. C:\this\path\good -> ['this', 'path', 'good'])
+    const normalizedPath = path.resolve(filePath);
+    let pathSegments = normalizedPath.split(path.sep).filter(Boolean);
+    // On Windows, drop leading drive segment (e.g. 'C:') so namespace is just folder/file names
+    if (pathSegments.length > 0 && /^[A-Za-z]:$/.test(pathSegments[0])) {
+      pathSegments = pathSegments.slice(1);
+    }
+    const namespace = pathSegments;
+
     let metadata = {
       filePath,
       fileName: path.basename(filePath),
       fileType: ext,
       fileSize: stats.size,
-      modifiedAt: stats.mtimeMs
+      modifiedAt: stats.mtimeMs,
+      namespace
     };
 
     try {
@@ -66,6 +77,19 @@ class DocumentProcessor {
         case '.csv':
           const csvContent = await fsPromises.readFile(filePath, 'utf-8');
           content = csvContent;
+          break;
+        
+        case '.html':
+        case '.htm':
+          const htmlContent = await fsPromises.readFile(filePath, 'utf-8');
+          content = htmlToText(htmlContent, {
+            wordwrap: false,
+            selectors: [
+              { selector: 'script', format: 'skip' },
+              { selector: 'style', format: 'skip' },
+              { selector: 'noscript', format: 'skip' }
+            ]
+          });
           break;
         
         default:

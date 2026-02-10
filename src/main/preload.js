@@ -53,6 +53,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   
   // Path checking
   isDirectory: (filePath) => ipcRenderer.invoke('is-directory', filePath),
+
+  // Open path in system file manager
+  openPathInExplorer: (pathToOpen) => ipcRenderer.invoke('open-path-in-explorer', pathToOpen),
   
   // Events
   onIngestionUpdate: (callback) => {

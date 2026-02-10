@@ -3,6 +3,7 @@ let currentCanvas = null;
 let splitterPosition = 250;
 let searchSplitterPosition = 300; // Height for horizontal splitter in search
 let chunkDetailSplitterPosition = 300; // Width for vertical splitter in chunk details
+let vectorStoreSplitterPosition = 280; // Height of documents panel (top) in vector store
 let mruSearches = [];
 let selectedDocumentId = null;
 let selectedChunkId = null;
@@ -13,7 +14,11 @@ let searchStartTime = null; // Start time of current search
 
 // Initialize app
 document.addEventListener('DOMContentLoaded', async () => {
-  await initializeApp();
+  try {
+    await initializeApp();
+  } finally {
+    hideLoadingScreen();
+  }
   setupEventListeners();
   loadSettings();
 });
@@ -44,6 +49,9 @@ async function initializeApp() {
   if (settings.chunkDetailSplitterPosition) {
     chunkDetailSplitterPosition = settings.chunkDetailSplitterPosition;
   }
+  if (settings.vectorStoreSplitterPosition) {
+    vectorStoreSplitterPosition = settings.vectorStoreSplitterPosition;
+  }
 
   // Load MRU searches
   if (settings.mruSearches) {
@@ -55,6 +63,7 @@ async function initializeApp() {
   setupSplitter();
   setupSearchSplitter();
   setupChunkDetailSplitter();
+  setupVectorStoreSplitter();
 
   // Setup tree navigation
   setupTreeNavigation();
@@ -83,6 +92,11 @@ async function initializeApp() {
   window.electronAPI.onMCPServerLog((data) => {
     addServerLog(data);
   });
+}
+
+function hideLoadingScreen() {
+  const el = document.getElementById('app-loading');
+  if (el) el.style.display = 'none';
 }
 
 function setupEventListeners() {
@@ -205,6 +219,29 @@ function setupEventListeners() {
   if (regenerateVectorStoreBtn) {
     regenerateVectorStoreBtn.addEventListener('click', async () => {
       await regenerateVectorStore();
+    });
+  }
+
+  // Chunks panel close button: clear selection and show placeholder
+  const chunksPanelCloseBtn = document.getElementById('chunks-panel-close-btn');
+  if (chunksPanelCloseBtn) {
+    chunksPanelCloseBtn.addEventListener('click', () => {
+      const tbody = document.getElementById('chunks-tbody');
+      const subtitle = document.getElementById('chunks-panel-subtitle');
+      if (tbody) tbody.innerHTML = '<tr><td colspan="5" style="text-align: center; padding: 20px; color: #757575;">Click a document row above to view its chunks.</td></tr>';
+      if (subtitle) subtitle.textContent = '';
+      selectedDocumentId = null;
+    });
+  }
+
+  // Documents table: delegate click so row clicks open chunks (avoids per-row listener issues)
+  const documentsTable = document.getElementById('documents-table');
+  if (documentsTable) {
+    documentsTable.addEventListener('click', (e) => {
+      const row = e.target.closest('tbody tr');
+      if (!row || !row.dataset.documentId) return;
+      e.preventDefault();
+      showDocumentChunks(row.dataset.documentId);
     });
   }
 
@@ -382,6 +419,63 @@ function applyChunkDetailSplitterPosition() {
   }
 }
 
+function setupVectorStoreSplitter() {
+  const splitter = document.getElementById('vector-store-horizontal-splitter');
+  const topPanel = document.getElementById('vector-store-documents-panel');
+  const container = document.getElementById('vector-store-split-container');
+  if (!splitter || !topPanel || !container) return;
+
+  let isDragging = false;
+
+  splitter.addEventListener('mousedown', (e) => {
+    isDragging = true;
+    splitter.classList.add('dragging');
+    document.body.style.cursor = 'row-resize';
+    e.preventDefault();
+  });
+
+  document.addEventListener('mousemove', (e) => {
+    if (!isDragging) return;
+
+    const containerRect = container.getBoundingClientRect();
+    const relativeY = e.clientY - containerRect.top;
+
+    const minHeight = 120;
+    const maxHeight = containerRect.height - 120;
+
+    if (relativeY >= minHeight && relativeY <= maxHeight) {
+      vectorStoreSplitterPosition = relativeY;
+      topPanel.style.height = `${relativeY}px`;
+      topPanel.style.flexShrink = '0';
+    }
+  });
+
+  document.addEventListener('mouseup', () => {
+    if (isDragging) {
+      isDragging = false;
+      splitter.classList.remove('dragging');
+      document.body.style.cursor = '';
+      saveSettings();
+    }
+  });
+}
+
+function applyVectorStoreSplitterPosition() {
+  const topPanel = document.getElementById('vector-store-documents-panel');
+  const container = document.getElementById('vector-store-split-container');
+  if (!topPanel || !container) return;
+
+  const containerHeight = container.getBoundingClientRect().height || container.offsetHeight;
+  if (containerHeight > 0) {
+    const minHeight = 120;
+    const maxHeight = containerHeight - 120;
+    const adjusted = Math.max(minHeight, Math.min(maxHeight, vectorStoreSplitterPosition));
+    vectorStoreSplitterPosition = adjusted;
+    topPanel.style.height = `${adjusted}px`;
+    topPanel.style.flexShrink = '0';
+  }
+}
+
 function setupTreeNavigation() {
   const treeItems = document.querySelectorAll('.tree-item');
   
@@ -430,6 +524,7 @@ function showCanvas(canvasName) {
     case 'vector-store':
       document.getElementById('vector-store-canvas').style.display = 'block';
       refreshVectorStore();
+      requestAnimationFrame(() => applyVectorStoreSplitterPosition());
       break;
     case 'search':
       document.getElementById('search-canvas').style.display = 'block';
@@ -517,8 +612,13 @@ async function refreshDirectories() {
     pathLink.style.cursor = 'pointer';
     pathLink.style.color = '#1976d2';
     pathLink.style.textDecoration = 'underline';
+    pathLink.title = 'Click to expand/collapse • Ctrl+Click to open in Explorer';
     pathLink.addEventListener('click', async (e) => {
       e.stopPropagation();
+      if (e.ctrlKey) {
+        await window.electronAPI.openPathInExplorer(dir.path);
+        return;
+      }
       await toggleDirectoryFiles(dir.path, row);
     });
     pathCell.appendChild(pathLink);
@@ -530,6 +630,11 @@ async function refreshDirectories() {
     recursiveCheckbox.checked = dir.recursive || false;
     recursiveCheckbox.addEventListener('change', async () => {
       await window.updateDirectoryRecursive(dir.path, recursiveCheckbox.checked);
+      // If the file list is currently visible (expanded), refresh it immediately with the new recursive setting
+      const filesRow = row.nextElementSibling;
+      if (filesRow?.classList.contains('directory-files-row')) {
+        await showDirectoryFiles(dir.path, row);
+      }
     });
     recursiveCell.appendChild(recursiveCheckbox);
     
@@ -686,45 +791,57 @@ async function refreshVectorStore() {
     const row = document.createElement('tr');
     row.dataset.documentId = doc.id;
     row.style.cursor = 'pointer';
-    row.addEventListener('click', () => showDocumentChunks(doc.id));
+    row.title = 'Click to view chunks';
     
     // Format the last updated timestamp
     const lastUpdated = doc.updated_at 
       ? new Date(doc.updated_at).toLocaleString() 
       : 'N/A';
     
+    const chunkCount = doc.chunk_count != null ? String(doc.chunk_count) : '-';
     row.innerHTML = `
       <td>${doc.file_name}</td>
       <td>${doc.file_type}</td>
       <td><span class="status-badge status-${doc.status}">${doc.status}</span></td>
       <td>${lastUpdated}</td>
-      <td>-</td>
+      <td>${chunkCount}</td>
     `;
     tbody.appendChild(row);
   });
 }
 
 async function showDocumentChunks(documentId) {
-  console.log('showDocumentChunks called with documentId:', documentId);
-  selectedDocumentId = documentId;
-  const chunks = await window.electronAPI.getDocumentChunks(documentId);
-  console.log('Chunks retrieved:', chunks.length);
-  
-  // Fetch document info for updated_at timestamp
-  let doc = null;
-  try {
-    doc = await window.electronAPI.getDocument(documentId);
-    console.log('Document info retrieved:', doc);
-  } catch (error) {
-    console.error('Error fetching document info:', error);
-  }
-  
+  if (!documentId) return;
   const panel = document.getElementById('chunks-panel');
   const tbody = document.getElementById('chunks-tbody');
-  
-  console.log('Panel found:', panel !== null, 'TBody found:', tbody !== null);
-  
-  panel.style.display = 'block';
+  const subtitle = document.getElementById('chunks-panel-subtitle');
+  if (!panel || !tbody) return;
+
+  // Show loading state (panel is always visible in split layout)
+  if (subtitle) subtitle.textContent = 'Loading…';
+  tbody.innerHTML = '<tr><td colspan="5" style="text-align: center; padding: 20px;">Loading chunks…</td></tr>';
+
+  selectedDocumentId = documentId;
+  let doc = null;
+  let chunks = [];
+  try {
+    chunks = await window.electronAPI.getDocumentChunks(documentId);
+    try {
+      doc = await window.electronAPI.getDocument(documentId);
+    } catch (e) {
+      console.error('Error fetching document info:', e);
+    }
+  } catch (error) {
+    console.error('Error loading chunks:', error);
+    if (subtitle) subtitle.textContent = '';
+    tbody.innerHTML = `<tr><td colspan="5" style="text-align: center; padding: 20px; color: #d32f2f;">Failed to load chunks: ${error.message}</td></tr>`;
+    return;
+  }
+
+  if (subtitle) {
+    const fileName = doc ? doc.file_name : 'document';
+    subtitle.textContent = `Chunks for "${fileName}". Click a row or View to see full content and metadata.`;
+  }
   tbody.innerHTML = '';
   
   // Update chunk count in documents table
@@ -763,6 +880,15 @@ async function showDocumentChunks(documentId) {
     const previewCell = document.createElement('td');
     previewCell.textContent = preview;
     
+    const metadataCell = document.createElement('td');
+    if (chunk.metadata && typeof chunk.metadata === 'object' && Object.keys(chunk.metadata).length > 0) {
+      const metaStr = JSON.stringify(chunk.metadata);
+      metadataCell.textContent = metaStr.length > 80 ? metaStr.substring(0, 80) + '...' : metaStr;
+      metadataCell.title = metaStr;
+    } else {
+      metadataCell.textContent = '-';
+    }
+    
     const lastUpdatedCell = document.createElement('td');
     lastUpdatedCell.textContent = lastUpdated;
     
@@ -798,6 +924,7 @@ async function showDocumentChunks(documentId) {
     
     row.appendChild(indexCell);
     row.appendChild(previewCell);
+    row.appendChild(metadataCell);
     row.appendChild(lastUpdatedCell);
     row.appendChild(actionsCell);
     
@@ -1738,6 +1865,7 @@ async function saveSettings() {
   settings.splitterPosition = splitterPosition;
   settings.searchSplitterPosition = searchSplitterPosition;
   settings.chunkDetailSplitterPosition = chunkDetailSplitterPosition;
+  settings.vectorStoreSplitterPosition = vectorStoreSplitterPosition;
   settings.mruSearches = mruSearches;
   await window.electronAPI.saveSettings(settings);
 }
@@ -1819,6 +1947,9 @@ async function loadSettings() {
   }
   if (settings.chunkDetailSplitterPosition) {
     chunkDetailSplitterPosition = settings.chunkDetailSplitterPosition;
+  }
+  if (settings.vectorStoreSplitterPosition) {
+    vectorStoreSplitterPosition = settings.vectorStoreSplitterPosition;
   }
   if (settings.mruSearches) {
     mruSearches = settings.mruSearches;

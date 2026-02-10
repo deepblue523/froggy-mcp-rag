@@ -227,6 +227,17 @@ module.exports = function setupIpcHandlers(ipcMain, ragService, mcpService) {
     }
   });
 
+  // Open path in system file manager (Explorer, Finder, etc.)
+  ipcMain.handle('open-path-in-explorer', async (_, pathToOpen) => {
+    const { shell } = require('electron');
+    const result = await shell.openPath(pathToOpen);
+    if (result) {
+      console.error('Error opening path:', result);
+      return { success: false, error: result };
+    }
+    return { success: true };
+  });
+
   // Path checking handler
   ipcMain.handle('is-directory', (_, filePath) => {
     try {

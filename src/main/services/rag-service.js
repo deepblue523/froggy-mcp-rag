@@ -8,6 +8,16 @@ const { VectorStore } = require('./vector-store');
 const { DocumentProcessor } = require('./document-processor');
 const { SearchService } = require('./search-service');
 
+/** Compare two paths for equality (case-insensitive on Windows). */
+function pathsEqual(a, b) {
+  const na = path.resolve(a);
+  const nb = path.resolve(b);
+  if (process.platform === 'win32') {
+    return na.toLowerCase() === nb.toLowerCase();
+  }
+  return na === nb;
+}
+
 class RAGService extends EventEmitter {
   constructor(dataDir) {
     super();
@@ -194,7 +204,7 @@ class RAGService extends EventEmitter {
   }
 
   findSupportedFiles(dirPath, recursive) {
-    const supportedExts = ['.txt', '.pdf', '.docx', '.xlsx', '.csv'];
+    const supportedExts = ['.txt', '.pdf', '.docx', '.xlsx', '.csv', '.html', '.htm'];
     const files = [];
 
     const scanDir = (dir) => {
@@ -358,20 +368,17 @@ class RAGService extends EventEmitter {
   }
 
   getDirectoryFiles(dirPath) {
-    // Normalize directory path for comparison
+    // Normalize directory path for comparison (use path equality so we find the entry on all platforms)
     const normalizedDirPath = path.resolve(dirPath);
-    
-    // Find the directory entry to get recursive setting
-    const dirEntry = this.settings.directories.find(d => {
-      const normalized = path.resolve(d.path);
-      return normalized === normalizedDirPath;
-    });
+
+    // Find the directory entry to get recursive setting (pathsEqual handles Windows casing)
+    const dirEntry = this.settings.directories.find(d => pathsEqual(d.path, normalizedDirPath));
     if (!dirEntry) {
       return [];
     }
 
-    // Find all supported files in the directory
-    const files = this.findSupportedFiles(dirPath, dirEntry.recursive || false);
+    // Find all supported files in the directory (respect recursive so child folders are included)
+    const files = this.findSupportedFiles(dirEntry.path, dirEntry.recursive || false);
     
     // Get ingestion status
     const ingestionStatus = this.getIngestionStatus();
@@ -495,12 +502,7 @@ class RAGService extends EventEmitter {
   }
 
   updateDirectoryWatch(dirPath, watch, recursive) {
-    // Normalize paths for comparison
-    const normalizedDirPath = path.resolve(dirPath);
-    const dir = this.settings.directories.find(d => {
-      const normalized = path.resolve(d.path);
-      return normalized === normalizedDirPath;
-    });
+    const dir = this.settings.directories.find(d => pathsEqual(d.path, dirPath));
     if (dir) {
       dir.watch = watch;
       dir.recursive = recursive;
@@ -661,7 +663,7 @@ class RAGService extends EventEmitter {
           }
         }
         const ext = path.extname(filePath).toLowerCase();
-        if (['.txt', '.pdf', '.docx', '.xlsx', '.csv'].includes(ext)) {
+        if (['.txt', '.pdf', '.docx', '.xlsx', '.csv', '.html', '.htm'].includes(ext)) {
           console.log(`[Watcher] Queueing new file: ${filePath}`);
           this.addToQueue(filePath, 'file');
         }
@@ -687,7 +689,7 @@ class RAGService extends EventEmitter {
           }
         }
         const ext = path.extname(filePath).toLowerCase();
-        if (['.txt', '.pdf', '.docx', '.xlsx', '.csv'].includes(ext)) {
+        if (['.txt', '.pdf', '.docx', '.xlsx', '.csv', '.html', '.htm'].includes(ext)) {
           console.log(`[Watcher] Queueing changed file: ${filePath}`);
           this.addToQueue(filePath, 'file');
         }
@@ -698,7 +700,7 @@ class RAGService extends EventEmitter {
       console.log(`[Watcher] File deleted: ${filePath}`);
       // File was deleted from watched directory, remove from vector store
       const ext = path.extname(filePath).toLowerCase();
-      if (['.txt', '.pdf', '.docx', '.xlsx', '.csv'].includes(ext)) {
+      if (['.txt', '.pdf', '.docx', '.xlsx', '.csv', '.html', '.htm'].includes(ext)) {
         const fileId = this.getFileId(filePath);
         this.vectorStore.deleteDocument(fileId);
         // Emit event to notify UI of vector store change

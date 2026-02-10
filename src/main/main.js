@@ -259,18 +259,22 @@ ipcMain.handle('install-update', async () => {
   return { success: false, error: 'Updates only available in production builds' };
 });
 
-app.whenReady().then(async () => {
+app.whenReady().then(() => {
   // Setup auto-updater
   setupAutoUpdater();
-  
-  // Initialize services before creating window
-  try {
-    await initializeServices();
-  } catch (error) {
-    console.error('Failed to initialize services:', error);
-  }
-  
+
+  // Register IPC handlers with null refs so renderer calls can wait for services
+  require('./ipc-handlers')(ipcMain, null, null);
+
+  // Show window immediately so the app feels responsive
   createWindow();
+
+  // Defer service init so the first paint can show the loading screen, then run in background
+  setImmediate(() => {
+    initializeServices().catch((error) => {
+      console.error('Failed to initialize services:', error);
+    });
+  });
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {

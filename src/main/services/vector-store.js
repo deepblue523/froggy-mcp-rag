@@ -131,7 +131,12 @@ class VectorStore {
   }
 
   getDocuments() {
-    const stmt = this.db.prepare('SELECT * FROM documents ORDER BY ingested_at DESC');
+    const stmt = this.db.prepare(`
+      SELECT d.*,
+             (SELECT COUNT(*) FROM chunks c WHERE c.document_id = d.id) AS chunk_count
+      FROM documents d
+      ORDER BY d.ingested_at DESC
+    `);
     return stmt.all();
   }
 

@@ -7,7 +7,16 @@
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-  <div class="app-container">
+  <!-- Shown immediately (no JS); hidden when app is ready -->
+  <div id="app-loading" class="app-loading">
+    <div class="app-loading-content">
+      <img src="./images/Froggy RAG x32.png" alt="" class="app-loading-logo" width="64" height="64">
+      <h2 class="app-loading-title">Froggy RAG MCP</h2>
+      <p class="app-loading-message">Starting up...</p>
+      <div class="app-loading-spinner"></div>
+    </div>
+  </div>
+  <div class="app-container" id="app-container">
     <!-- Header -->
     <header class="header">
       <div style="display: flex; align-items: center; gap: 10px;">
@@ -68,7 +77,7 @@
           <h2>Files</h2>
           <div class="toolbar">
             <button class="btn btn-primary" id="add-file-btn">Add File</button>
-            <input type="file" id="file-input" multiple style="display: none;" accept=".txt,.pdf,.docx,.xlsx,.csv">
+            <input type="file" id="file-input" multiple style="display: none;" accept=".txt,.pdf,.docx,.xlsx,.csv,.html,.htm">
           </div>
           <div class="grid-container" id="files-grid">
             <table class="data-grid">
@@ -117,35 +126,48 @@
             <p style="margin: 10px 0 0 0; font-size: 12px; color: #757575;">This will clear the entire vector store and re-index all files from your current files/directories settings.</p>
           </div>
           <div class="stats-bar" id="vector-store-stats"></div>
-          <div class="grid-container">
-            <div class="documents-panel">
+          <div class="vector-store-split-container" id="vector-store-split-container">
+            <div class="documents-panel vector-store-split-top" id="vector-store-documents-panel">
               <h3>Documents</h3>
-              <table class="data-grid">
-                <thead>
-                  <tr>
-                    <th>File Name</th>
-                    <th>Type</th>
-                    <th>Status</th>
-                    <th>Last Updated</th>
-                    <th>Chunks</th>
-                  </tr>
-                </thead>
-                <tbody id="documents-tbody"></tbody>
-              </table>
+              <p style="margin: 0 0 10px 0; font-size: 13px; color: #616161;"><strong>Tip:</strong> Click a document row to view its chunks and metadata.</p>
+              <div class="vector-store-table-wrap">
+                <table class="data-grid" id="documents-table">
+                  <thead>
+                    <tr>
+                      <th>File Name</th>
+                      <th>Type</th>
+                      <th>Status</th>
+                      <th>Last Updated</th>
+                      <th>Chunks</th>
+                    </tr>
+                  </thead>
+                  <tbody id="documents-tbody"></tbody>
+                </table>
+              </div>
             </div>
-            <div class="chunks-panel" id="chunks-panel" style="display: none;">
-              <h3>Chunks</h3>
-              <table class="data-grid">
-                <thead>
-                  <tr>
-                    <th>Index</th>
-                    <th>Preview</th>
-                    <th>Last Updated</th>
-                    <th>Actions</th>
-                  </tr>
-                </thead>
-                <tbody id="chunks-tbody"></tbody>
-              </table>
+            <div class="horizontal-splitter" id="vector-store-horizontal-splitter"></div>
+            <div class="chunks-panel vector-store-split-bottom" id="chunks-panel">
+              <div style="margin-bottom: 10px; flex-shrink: 0;">
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                  <h3 style="margin: 0;">Chunks</h3>
+                  <button class="btn btn-secondary" id="chunks-panel-close-btn" style="font-size: 12px; padding: 4px 12px;">Close</button>
+                </div>
+                <p id="chunks-panel-subtitle" style="margin: 4px 0 0 0; font-size: 12px; color: #616161;"></p>
+              </div>
+              <div class="vector-store-table-wrap">
+                <table class="data-grid">
+                  <thead>
+                    <tr>
+                      <th>Index</th>
+                      <th>Preview</th>
+                      <th>Metadata</th>
+                      <th>Last Updated</th>
+                      <th>Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody id="chunks-tbody"><tr><td colspan="5" style="text-align: center; padding: 20px; color: #757575;">Click a document row above to view its chunks.</td></tr></tbody>
+                </table>
+              </div>
             </div>
           </div>
           <!-- Chunk Detail Modal -->
